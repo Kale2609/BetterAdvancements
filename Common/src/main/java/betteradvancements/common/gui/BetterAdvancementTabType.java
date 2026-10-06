@@ -1,8 +1,10 @@
 package betteradvancements.common.gui;
 
 import betteradvancements.common.reference.Resources;
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.advancements.AdvancementTabType;
+import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
 
 import java.util.List;
@@ -63,6 +65,60 @@ public class BetterAdvancementTabType {
 
         int j = selected ? this.textureY + this.height : this.textureY;
         guiGraphics.blit(Resources.Gui.TABS, x + this.getX(index, width, height), y + this.getY(index, width, height), i, j, this.width, this.height);
+    }
+
+    public void drawProgressOverlay(
+        GuiGraphics guiGraphics,
+        int x,
+        int y,
+        int width,
+        int height,
+        boolean selected,
+        int index,
+        float progress,
+        int colour,
+        BetterAdvancementTab.BackgroundProgressDirection direction
+    ) {
+        progress = Mth.clamp(progress, 0.0F, 1.0F);
+        if (progress <= 0.0F || ((colour >>> 24) & 0xFF) == 0) {
+            return;
+        }
+
+        int tabX = x + this.getX(index, width, height);
+        int tabY = y + this.getY(index, width, height);
+        int fillWidth = Mth.floor(this.width * progress);
+        int fillHeight = Mth.floor(this.height * progress);
+
+        int scissorLeft = tabX;
+        int scissorTop = tabY;
+        int scissorRight = tabX + this.width;
+        int scissorBottom = tabY + this.height;
+
+        switch (direction) {
+            case LEFT_TO_RIGHT -> scissorRight = tabX + fillWidth;
+            case RIGHT_TO_LEFT -> scissorLeft = tabX + this.width - fillWidth;
+            case TOP_TO_BOTTOM -> scissorBottom = tabY + fillHeight;
+            case BOTTOM_TO_TOP -> scissorTop = tabY + this.height - fillHeight;
+        }
+
+        if (scissorRight <= scissorLeft || scissorBottom <= scissorTop) {
+            return;
+        }
+
+        float alpha = ((colour >>> 24) & 0xFF) / 255.0F;
+        float red = ((colour >>> 16) & 0xFF) / 255.0F;
+        float green = ((colour >>> 8) & 0xFF) / 255.0F;
+        float blue = (colour & 0xFF) / 255.0F;
+
+        RenderSystem.defaultBlendFunc();
+        guiGraphics.enableScissor(scissorLeft, scissorTop, scissorRight, scissorBottom);
+        try {
+            RenderSystem.setShaderColor(red, green, blue, alpha);
+            this.draw(guiGraphics, x, y, width, height, selected, index);
+        } finally {
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+            guiGraphics.disableScissor();
+        }
     }
 
     public void drawIcon(GuiGraphics guiGraphics, int left, int top, int width, int height, int index, ItemStack stack) {

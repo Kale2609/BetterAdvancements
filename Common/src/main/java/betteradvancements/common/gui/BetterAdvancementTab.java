@@ -21,6 +21,53 @@ import java.util.Optional;
 
 public class BetterAdvancementTab {
     public static boolean doFade = true;
+
+    public static final boolean DEFAULT_BACKGROUND_PROGRESS_ENABLED = false;
+    public static final BackgroundProgressMode DEFAULT_BACKGROUND_PROGRESS_MODE = BackgroundProgressMode.PROGRESS_FILL;
+    public static final BackgroundProgressDirection DEFAULT_BACKGROUND_PROGRESS_DIRECTION = BackgroundProgressDirection.BOTTOM_TO_TOP;
+    public static final int DEFAULT_BACKGROUND_PROGRESS_COLOR = 0x66D4A72C;
+    public static final int DEFAULT_BACKGROUND_COMPLETED_COLOR = 0x99FFD700;
+
+    public static boolean backgroundProgressEnabled = DEFAULT_BACKGROUND_PROGRESS_ENABLED;
+    public static BackgroundProgressMode backgroundProgressMode = DEFAULT_BACKGROUND_PROGRESS_MODE;
+    public static BackgroundProgressDirection backgroundProgressDirection = DEFAULT_BACKGROUND_PROGRESS_DIRECTION;
+    public static int backgroundProgressColor = DEFAULT_BACKGROUND_PROGRESS_COLOR;
+    public static int backgroundCompletedColor = DEFAULT_BACKGROUND_COMPLETED_COLOR;
+
+    public enum BackgroundProgressMode {
+        OFF,
+        COMPLETION_COLOR,
+        PROGRESS_FILL;
+
+        public static BackgroundProgressMode fromName(String name) {
+            if (name != null) {
+                for (BackgroundProgressMode value : values()) {
+                    if (value.name().equalsIgnoreCase(name)) {
+                        return value;
+                    }
+                }
+            }
+            return DEFAULT_BACKGROUND_PROGRESS_MODE;
+        }
+    }
+
+    public enum BackgroundProgressDirection {
+        LEFT_TO_RIGHT,
+        RIGHT_TO_LEFT,
+        TOP_TO_BOTTOM,
+        BOTTOM_TO_TOP;
+
+        public static BackgroundProgressDirection fromName(String name) {
+            if (name != null) {
+                for (BackgroundProgressDirection value : values()) {
+                    if (value.name().equalsIgnoreCase(name)) {
+                        return value;
+                    }
+                }
+            }
+            return DEFAULT_BACKGROUND_PROGRESS_DIRECTION;
+        }
+    }
     public static final Map<AdvancementHolder, Tuple<Integer, Integer>> scrollHistory = Maps.newLinkedHashMap();
 
     private final Minecraft minecraft;
@@ -65,6 +112,7 @@ public class BetterAdvancementTab {
 
     public void drawTab(GuiGraphics guiGraphics, int left, int top, int width, int height, boolean selected) {
         this.type.draw(guiGraphics, left, top, width, height, selected, this.index);
+        this.drawTabProgress(guiGraphics, left, top, width, height, selected);
     }
 
     public void drawIcon(GuiGraphics guiGraphics, int left, int top,int width, int height) {
@@ -101,6 +149,46 @@ public class BetterAdvancementTab {
         this.root.draw(guiGraphics, this.scrollX, this.scrollY);
         guiGraphics.pose().popPose();
         guiGraphics.disableScissor();
+    }
+
+    private void drawTabProgress(GuiGraphics guiGraphics, int left, int top, int width, int height, boolean selected) {
+        if (!backgroundProgressEnabled || backgroundProgressMode == BackgroundProgressMode.OFF) {
+            return;
+        }
+
+        float progress = this.getCompletionProgress();
+        if (backgroundProgressMode == BackgroundProgressMode.COMPLETION_COLOR) {
+            if (progress >= 1.0F) {
+                this.type.drawProgressOverlay(
+                    guiGraphics, left, top, width, height, selected, this.index, 1.0F,
+                    backgroundCompletedColor, backgroundProgressDirection);
+            }
+            return;
+        }
+
+        if (progress <= 0.0F) {
+            return;
+        }
+
+        int colour = progress >= 1.0F ? backgroundCompletedColor : backgroundProgressColor;
+        this.type.drawProgressOverlay(
+            guiGraphics, left, top, width, height, selected, this.index, progress, colour,
+            backgroundProgressDirection);
+    }
+
+    private float getCompletionProgress() {
+        if (this.widgets.isEmpty()) {
+            return 0.0F;
+        }
+
+        int completed = 0;
+        for (BetterAdvancementWidget widget : this.widgets.values()) {
+            if (widget.isCompleted()) {
+                completed++;
+            }
+        }
+
+        return (float) completed / (float) this.widgets.size();
     }
 
     public void drawToolTips(GuiGraphics guiGraphics, int mouseX, int mouseY, int left, int top, int width, int height) {

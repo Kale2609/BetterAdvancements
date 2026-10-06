@@ -237,6 +237,10 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
         }
     }
 
+    public boolean isCompleted() {
+        return this.advancementProgress != null && this.advancementProgress.isDone();
+    }
+
     public void getAdvancementProgress(AdvancementProgress advancementProgressIn) {
         this.advancementProgress = advancementProgressIn;
         this.refreshHover();

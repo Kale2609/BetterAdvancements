@@ -38,6 +38,11 @@ public class ConfigValues {
     public static ColorEntry defaultUncompletedLineColor;
 
     public static BooleanListEntry onlyUseAboveAdvancementTabs;
+    public static BooleanListEntry backgroundProgressEnabled;
+    public static DropdownBoxEntry<BetterAdvancementTab.BackgroundProgressMode> backgroundProgressMode;
+    public static DropdownBoxEntry<BetterAdvancementTab.BackgroundProgressDirection> backgroundProgressDirection;
+    public static ColorEntry backgroundProgressColor;
+    public static ColorEntry backgroundCompletedColor;
 
     public static void build(ConfigCategory category, ConfigEntryBuilder builder) {
         defaultUncompletedIconColor = builder.startAlphaColorField(Component.literal("defaultUncompletedIconColor"), BetterDisplayInfo.defaultUncompletedIconColor)
@@ -123,6 +128,50 @@ public class ConfigValues {
             .setSaveConsumer(newValue -> BetterDisplayInfo.defaultUncompletedLineColor = newValue)
             .build();
         category.addEntry(defaultUncompletedLineColor);
+
+        backgroundProgressEnabled = builder.startBooleanToggle(Component.literal("backgroundProgressEnabled"), BetterAdvancementTab.backgroundProgressEnabled)
+            .setDefaultValue(BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_ENABLED)
+            .setSaveConsumer(newValue -> BetterAdvancementTab.backgroundProgressEnabled = newValue)
+            .build();
+        category.addEntry(backgroundProgressEnabled);
+
+        backgroundProgressMode = builder.startDropdownMenu(
+                Component.literal("backgroundProgressMode"),
+                BetterAdvancementTab.backgroundProgressMode,
+                BetterAdvancementTab.BackgroundProgressMode::fromName,
+                value -> Component.literal(value.name()))
+            .setSelections(java.util.Arrays.asList(BetterAdvancementTab.BackgroundProgressMode.values()))
+            .setDefaultValue(BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_MODE)
+            .setSaveConsumer(newValue -> BetterAdvancementTab.backgroundProgressMode = newValue)
+            .build();
+        category.addEntry(backgroundProgressMode);
+
+        backgroundProgressDirection = builder.startDropdownMenu(
+                Component.literal("backgroundProgressDirection"),
+                BetterAdvancementTab.backgroundProgressDirection,
+                BetterAdvancementTab.BackgroundProgressDirection::fromName,
+                value -> Component.literal(value.name()))
+            .setSelections(java.util.Arrays.asList(BetterAdvancementTab.BackgroundProgressDirection.values()))
+            .setDefaultValue(BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_DIRECTION)
+            .setSaveConsumer(newValue -> BetterAdvancementTab.backgroundProgressDirection = newValue)
+            .build();
+        category.addEntry(backgroundProgressDirection);
+
+        backgroundProgressColor = builder.startAlphaColorField(
+                Component.literal("backgroundProgressColor"),
+                BetterAdvancementTab.backgroundProgressColor)
+            .setDefaultValue(BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_COLOR)
+            .setSaveConsumer(newValue -> BetterAdvancementTab.backgroundProgressColor = newValue)
+            .build();
+        category.addEntry(backgroundProgressColor);
+
+        backgroundCompletedColor = builder.startAlphaColorField(
+                Component.literal("backgroundCompletedColor"),
+                BetterAdvancementTab.backgroundCompletedColor)
+            .setDefaultValue(BetterAdvancementTab.DEFAULT_BACKGROUND_COMPLETED_COLOR)
+            .setSaveConsumer(newValue -> BetterAdvancementTab.backgroundCompletedColor = newValue)
+            .build();
+        category.addEntry(backgroundCompletedColor);
 
         onlyUseAboveAdvancementTabs = builder.startBooleanToggle(Component.literal("onlyUseAboveAdvancementTabs"), BetterAdvancementTabType.onlyUseAbove)
             .setDefaultValue(false)

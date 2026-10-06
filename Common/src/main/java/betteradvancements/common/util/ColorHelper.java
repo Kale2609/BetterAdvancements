@@ -73,6 +73,41 @@ public class ColorHelper {
         return RGB(Integer.parseInt(colour.substring(1, 3), 16), Integer.parseInt(colour.substring(3, 5), 16), Integer.parseInt(colour.substring(5, 7), 16));
     }
 
+    /**
+     * Convert a #AARRGGBB value to an ARGB int.
+     *
+     * @param colour the #AARRGGBB value
+     * @return the packed ARGB colour
+     * @throws IllegalArgumentException if the input is not exactly #AARRGGBB
+     */
+    public static int ARGB(String colour) {
+        if (!isARGB(colour)) {
+            throw new IllegalArgumentException("Use #AARRGGBB format");
+        }
+        return (int) Long.parseLong(colour.substring(1), 16);
+    }
+
+    public static boolean isARGB(String colour) {
+        if (colour == null || colour.length() != 9 || colour.charAt(0) != '#') {
+            return false;
+        }
+
+        for (int i = 1; i < colour.length(); i++) {
+            char c = colour.charAt(i);
+            boolean decimal = c >= '0' && c <= '9';
+            boolean upperHex = c >= 'A' && c <= 'F';
+            boolean lowerHex = c >= 'a' && c <= 'f';
+            if (!decimal && !upperHex && !lowerHex) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static String asARGBString(int colour) {
+        return String.format("#%08X", colour);
+    }
+
     public static String asRGBString(int colour) {
         return "#" + Integer.toHexString(colour).toUpperCase().substring(2);
     }

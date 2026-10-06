@@ -32,6 +32,11 @@ public class ConfigValues {
     public static ModConfigSpec.ConfigValue<String>  defaultUncompletedLineColor;
 
     public static ModConfigSpec.BooleanValue onlyUseAboveAdvancementTabs;
+    public static ModConfigSpec.BooleanValue backgroundProgressEnabled;
+    public static ModConfigSpec.ConfigValue<String> backgroundProgressMode;
+    public static ModConfigSpec.ConfigValue<String> backgroundProgressDirection;
+    public static ModConfigSpec.ConfigValue<String> backgroundProgressColor;
+    public static ModConfigSpec.ConfigValue<String> backgroundCompletedColor;
 
     public static ModConfigSpec build() {
         ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
@@ -56,6 +61,37 @@ public class ConfigValues {
         defaultUncompletedLineColor = builder.define("defaultUncompletedLineColor", "#FFFFFF");
 
         onlyUseAboveAdvancementTabs = builder.define("onlyUseAboveAdvancementTabs", false);
+        backgroundProgressEnabled = builder
+            .comment("Enable completion-based coloring of advancement tab buttons.")
+            .define("backgroundProgressEnabled", BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_ENABLED);
+        backgroundProgressMode = builder
+            .comment("OFF, COMPLETION_COLOR, or PROGRESS_FILL.")
+            .defineInList(
+                "backgroundProgressMode",
+                BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_MODE.name(),
+                java.util.Arrays.stream(BetterAdvancementTab.BackgroundProgressMode.values())
+                    .map(BetterAdvancementTab.BackgroundProgressMode::name)
+                    .toList());
+        backgroundProgressDirection = builder
+            .comment("LEFT_TO_RIGHT, RIGHT_TO_LEFT, TOP_TO_BOTTOM, or BOTTOM_TO_TOP.")
+            .defineInList(
+                "backgroundProgressDirection",
+                BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_DIRECTION.name(),
+                java.util.Arrays.stream(BetterAdvancementTab.BackgroundProgressDirection.values())
+                    .map(BetterAdvancementTab.BackgroundProgressDirection::name)
+                    .toList());
+        backgroundProgressColor = builder
+            .comment("ARGB tint color for partial tab-button progress, in #AARRGGBB format.")
+            .define(
+                "backgroundProgressColor",
+                ColorHelper.asARGBString(BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_COLOR),
+                ConfigValues::isValidArgb);
+        backgroundCompletedColor = builder
+            .comment("ARGB tint color used when the tab is fully completed, in #AARRGGBB format.")
+            .define(
+                "backgroundCompletedColor",
+                ColorHelper.asARGBString(BetterAdvancementTab.DEFAULT_BACKGROUND_COMPLETED_COLOR),
+                ConfigValues::isValidArgb);
 
         return builder.build();
     }
@@ -81,5 +117,16 @@ public class ConfigValues {
         BetterDisplayInfo.defaultUncompletedLineColor = ColorHelper.RGB(defaultUncompletedLineColor.get());
 
         BetterAdvancementTabType.onlyUseAbove = onlyUseAboveAdvancementTabs.get();
+        BetterAdvancementTab.backgroundProgressEnabled = backgroundProgressEnabled.get();
+        BetterAdvancementTab.backgroundProgressMode =
+            BetterAdvancementTab.BackgroundProgressMode.fromName(backgroundProgressMode.get());
+        BetterAdvancementTab.backgroundProgressDirection =
+            BetterAdvancementTab.BackgroundProgressDirection.fromName(backgroundProgressDirection.get());
+        BetterAdvancementTab.backgroundProgressColor = ColorHelper.ARGB(backgroundProgressColor.get());
+        BetterAdvancementTab.backgroundCompletedColor = ColorHelper.ARGB(backgroundCompletedColor.get());
+    }
+
+    private static boolean isValidArgb(Object value) {
+        return value instanceof String colour && ColorHelper.isARGB(colour);
     }
 }
