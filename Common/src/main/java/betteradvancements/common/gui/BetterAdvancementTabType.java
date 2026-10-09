@@ -20,7 +20,11 @@ public class BetterAdvancementTabType {
     public static boolean onlyUseAbove = false;
 
     public static BetterAdvancementTabType getTabType(int width, int height, int index) {
-        int indexOnPage = index % getMaxTabs(width, height);
+        int maxTabs = getMaxTabs(width, height);
+        if (maxTabs <= 0) {
+            return null;
+        }
+        int indexOnPage = index % maxTabs;
 
         int tabsAbove = ABOVE.getMax(width, height);
         int tabsRight = RIGHT.getMax(width, height);

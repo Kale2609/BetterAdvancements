@@ -2,6 +2,9 @@ package betteradvancements.forge;
 
 import betteradvancements.common.platform.IEventHelper;
 import betteradvancements.common.platform.IPlatformHelper;
+import betteradvancements.forge.config.ConfigValues;
+
+import java.util.List;
 
 public class ForgePlatformHelper implements IPlatformHelper {
     private final ForgeEventHelper eventHelper = new ForgeEventHelper();
@@ -20,5 +23,10 @@ public class ForgePlatformHelper implements IPlatformHelper {
     @Override
     public ForgeAdvancementVisitor getAdvancementVisitor() {
         return advancementVisitor;
+    }
+
+    @Override
+    public void saveCustomTabOrder(List<String> order) {
+        ConfigValues.saveCustomTabOrder(order);
     }
 }

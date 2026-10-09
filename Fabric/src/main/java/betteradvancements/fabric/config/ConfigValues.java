@@ -8,6 +8,7 @@ import betteradvancements.common.gui.BetterAdvancementsScreenButton;
 import betteradvancements.common.util.ColorHelper;
 import betteradvancements.common.util.CriteriaDetail;
 import betteradvancements.common.util.CriterionGrid;
+import betteradvancements.common.util.TabSortMode;
 import me.shedaniel.clothconfig2.api.ConfigCategory;
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder;
 import me.shedaniel.clothconfig2.gui.entries.BooleanListEntry;
@@ -25,11 +26,12 @@ public class ConfigValues {
 
     public static BooleanListEntry doFade;
     public static BooleanListEntry showDebugCoordinates;
-    public static BooleanListEntry orderTabsAlphabetically;
+    public static DropdownBoxEntry<TabSortMode> tabSortMode;
     public static IntegerSliderEntry uiScaling;
 
     public static DropdownBoxEntry<CriteriaDetail> detailLevel;
     public static BooleanListEntry requiresShift;
+    public static BooleanListEntry sortCriteriaAlphabetically;
     public static BooleanListEntry addToInventory;
 
     public static BooleanListEntry defaultDrawDirectLines;
@@ -76,11 +78,17 @@ public class ConfigValues {
             .setSaveConsumer(newValue -> BetterAdvancementsScreen.showDebugCoordinates = newValue)
             .build();
         category.addEntry(showDebugCoordinates);
-        orderTabsAlphabetically = builder.startBooleanToggle(Component.literal("orderTabsAlphabetically"), BetterAdvancementsScreen.orderTabsAlphabetically)
-            .setDefaultValue(false)
-            .setSaveConsumer(newValue -> BetterAdvancementsScreen.orderTabsAlphabetically = newValue)
+        tabSortMode = builder.startDropdownMenu(
+                Component.literal("tabSortMode"),
+                BetterAdvancementsScreen.getTabSortMode(),
+                TabSortMode::fromName,
+                value -> Component.literal(value.name()))
+            .setSelections(TabSortMode.valuesAsList())
+            .setDefaultValue(TabSortMode.ORIGINAL)
+            .setSaveConsumer(BetterAdvancementsScreen::setTabSortMode)
+            .setTooltip(Component.literal("ORIGINAL, ALPHABETICAL, COMPLETION, or CUSTOM. CUSTOM tabs can be reordered by dragging them."))
             .build();
-        category.addEntry(orderTabsAlphabetically);
+        category.addEntry(tabSortMode);
         uiScaling = builder.startIntSlider(Component.literal("uiScaling"), BetterAdvancementsScreen.uiScaling, 1, 100)
             .setTooltip(Component.literal("Values below 50% might give odd results, use on own risk ;)"))
             .setDefaultValue(100)
@@ -102,6 +110,12 @@ public class ConfigValues {
             .setSaveConsumer(newValue -> CriterionGrid.requiresShift = newValue)
             .build();
         category.addEntry(requiresShift);
+
+        sortCriteriaAlphabetically = builder.startBooleanToggle(Component.literal("sortCriteriaAlphabetically"), CriterionGrid.sortAlphabetically)
+            .setDefaultValue(true)
+            .setSaveConsumer(newValue -> CriterionGrid.sortAlphabetically = newValue)
+            .build();
+        category.addEntry(sortCriteriaAlphabetically);
         addToInventory = builder.startBooleanToggle(Component.literal("addInventoryButton"), BetterAdvancementsScreenButton.addToInventory)
             .setDefaultValue(false)
             .setSaveConsumer(newValue -> BetterAdvancementsScreenButton.addToInventory = newValue)

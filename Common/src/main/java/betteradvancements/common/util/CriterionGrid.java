@@ -8,12 +8,15 @@ import net.minecraft.network.chat.MutableComponent;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 // An arrangement of criteria into rows and columns
 public class CriterionGrid {
     public static CriteriaDetail detailLevel = CriteriaDetail.DEFAULT;
     public static boolean requiresShift = false;
+    public static boolean sortAlphabetically = true;
     private static final CriterionGrid empty = new CriterionGrid();
 
     private final List<Component> cellContents;
@@ -64,6 +67,8 @@ public class CriterionGrid {
         this.height = this.numRows * this.fontHeight;
     }
 
+    private record CriterionEntry(boolean obtained, String sortKey, Component component) {}
+
     public record Column(List<Component> cells, int width) {}
 
     // Of all the possible grids whose aspect ratio is less than the maximum, this method returns the one with the smallest number of rows.
@@ -77,33 +82,54 @@ public class CriterionGrid {
             return CriterionGrid.empty;
         }
         int numUnobtained = 0;
-        List<Component> cellContents = new ArrayList<>();
+        List<CriterionEntry> criterionEntries = new ArrayList<>();
+
         for (String criterion : requirements.names()) {
             CriterionProgress criterionProgress = progress.getCriterion(criterion);
+            boolean obtained = criterionProgress != null && criterionProgress.isDone();
             String criterionKey = "betteradvancements.criterion." + holder.id() + "." + criterion;
-            if (criterionProgress != null && criterionProgress.isDone()) {
+            MutableComponent label = Component.translatableWithFallback(criterionKey, criterion).withStyle(ChatFormatting.WHITE);
+
+            if (obtained) {
                 if (detailLevel.showObtained()) {
                     MutableComponent text = Component.literal(" + ").withStyle(ChatFormatting.GREEN);
-                    MutableComponent text2 = Component.translatableWithFallback(criterionKey, criterion).withStyle(ChatFormatting.WHITE);
-                    text.append(text2);
-                    cellContents.add(text);
+                    text.append(label);
+                    criterionEntries.add(new CriterionEntry(true, label.getString(), text));
                 }
-            }
-            else {
+            } else {
                 if (detailLevel.showUnobtained()) {
                     MutableComponent text = Component.literal(" x ").withStyle(ChatFormatting.DARK_RED);
-                    MutableComponent text2 = Component.translatableWithFallback(criterionKey, criterion).withStyle(ChatFormatting.WHITE);
-                	text.append(text2);
-                    cellContents.add(text);
+                    text.append(label);
+                    criterionEntries.add(new CriterionEntry(false, label.getString(), text));
                 }
                 numUnobtained++;
             }
         }
 
+        if (sortAlphabetically) {
+            Comparator<CriterionEntry> alphabetical = Comparator
+                .comparing((CriterionEntry entry) -> entry.sortKey().toLowerCase(Locale.ROOT))
+                .thenComparing(CriterionEntry::sortKey);
+
+            if (detailLevel.showObtained() && detailLevel.showUnobtained()) {
+                criterionEntries.sort(
+                    Comparator.comparing((CriterionEntry entry) -> !entry.obtained())
+                        .thenComparing(alphabetical)
+                );
+            } else {
+                criterionEntries.sort(alphabetical);
+            }
+        }
+
+        List<Component> cellContents = new ArrayList<>(criterionEntries.size() + 1);
+        for (CriterionEntry entry : criterionEntries) {
+            cellContents.add(entry.component());
+        }
+
         if (!detailLevel.showUnobtained()) {
             MutableComponent text = Component.literal(" x ").withStyle(ChatFormatting.DARK_RED);
             MutableComponent text2 = Component.translatable("betteradvancements.remaining", numUnobtained).withStyle(ChatFormatting.WHITE, ChatFormatting.ITALIC);
-        	text.append(text2);
+            text.append(text2);
             cellContents.add(text);
         }
 
@@ -128,4 +154,74 @@ public class CriterionGrid {
         } while(numCols <= cellContents.size() && currGrid.width <= maxWidth);
         return prevGrid != null ? prevGrid : currGrid;
     }
+    public boolean isEmpty() {
+        return this.cellContents.isEmpty();
+    }
+
+    /**
+     * Splits this grid into contiguous pages that fit both the requested row count and width.
+     *
+     * <p>The entries stay in their already-sorted order.  A page may use fewer columns than
+     * the full grid.  This is important because simply slicing the flattened entry list and
+     * reusing {@link #numColumns} can make a page wider than the original grid when several
+     * wide entries happen to land on the same page.</p>
+     */
+    public List<CriterionGrid> getPages(int maxRows, int maxWidth) {
+        if (this.cellContents.isEmpty()) {
+            return List.of(CriterionGrid.empty);
+        }
+
+        int rowsPerPage = Math.max(1, maxRows);
+        int safeMaxWidth = Math.max(1, maxWidth);
+        int maxColumns = Math.max(1, this.cellContents.size());
+        List<CriterionGrid> pages = new ArrayList<>();
+
+        int from = 0;
+        while (from < this.cellContents.size()) {
+            CriterionGrid bestPage = null;
+            int bestCount = 0;
+            int remaining = this.cellContents.size() - from;
+
+            for (int columns = 1; columns <= maxColumns && columns <= remaining; columns++) {
+                int count = Math.min(remaining, rowsPerPage * columns);
+                CriterionGrid candidate = this.createSlice(from, count, columns);
+
+                if (candidate.numRows <= rowsPerPage && candidate.width <= safeMaxWidth) {
+                    if (count > bestCount || count == bestCount && (bestPage == null || candidate.width < bestPage.width)) {
+                        bestPage = candidate;
+                        bestCount = count;
+                    }
+                }
+            }
+
+            if (bestPage == null) {
+                // A single translated criterion can itself be wider than the available panel.
+                // Keep forward progress and let the caller's scissor clip that unavoidable case.
+                bestPage = this.createSlice(from, 1, 1);
+                bestCount = 1;
+            }
+
+            pages.add(bestPage);
+            from += bestCount;
+        }
+
+        return pages;
+    }
+
+    private CriterionGrid createSlice(int from, int count, int columns) {
+        int to = Math.min(this.cellContents.size(), from + count);
+        List<Component> pageContents = new ArrayList<>(this.cellContents.subList(from, to));
+        int[] pageWidths = new int[pageContents.size()];
+        System.arraycopy(this.cellWidths, from, pageWidths, 0, pageContents.size());
+
+        CriterionGrid page = new CriterionGrid(
+            pageContents,
+            pageWidths,
+            this.fontHeight,
+            Math.min(Math.max(1, columns), pageContents.size())
+        );
+        page.init();
+        return page;
+    }
+
 }

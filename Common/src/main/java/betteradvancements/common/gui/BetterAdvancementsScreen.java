@@ -3,6 +3,7 @@ package betteradvancements.common.gui;
 import betteradvancements.common.platform.Services;
 import betteradvancements.common.reference.Resources;
 import betteradvancements.common.util.RenderUtil;
+import betteradvancements.common.util.TabSortMode;
 import com.google.common.collect.Maps;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.advancements.AdvancementHolder;
@@ -16,8 +17,16 @@ import net.minecraft.client.multiplayer.ClientAdvancements;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundSeenAdvancementsPacket;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.util.Mth;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class BetterAdvancementsScreen extends Screen implements ClientAdvancements.Listener {
@@ -36,12 +45,54 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
     protected int internalWidth, internalHeight;
     public static int uiScaling = 100;
     public static boolean showDebugCoordinates = false;
+    /**
+     * Legacy compatibility flag. New code should use {@link #tabSortMode}.
+     */
     public static boolean orderTabsAlphabetically = false;
+    public static TabSortMode tabSortMode = TabSortMode.ORIGINAL;
+    private static final List<String> customTabOrder = new ArrayList<>();
+
     private BetterAdvancementWidget advConnectedToMouse = null;
+    private BetterAdvancementTab draggedTab;
+    private boolean customTabOrderChanged;
 
     public BetterAdvancementsScreen(ClientAdvancements clientAdvancements) {
         super(GameNarrator.NO_TITLE);
         this.clientAdvancements = clientAdvancements;
+    }
+
+    public static TabSortMode getTabSortMode() {
+        if (tabSortMode == TabSortMode.ORIGINAL && orderTabsAlphabetically) {
+            return TabSortMode.ALPHABETICAL;
+        }
+        return tabSortMode;
+    }
+
+    public static void setTabSortMode(TabSortMode mode) {
+        tabSortMode = mode == null ? TabSortMode.ORIGINAL : mode;
+        orderTabsAlphabetically = tabSortMode == TabSortMode.ALPHABETICAL;
+    }
+
+    public static List<String> getCustomTabOrder() {
+        return List.copyOf(customTabOrder);
+    }
+
+    public static void setCustomTabOrder(Iterable<? extends String> order) {
+        LinkedHashSet<String> validated = new LinkedHashSet<>();
+        if (order != null) {
+            for (String id : order) {
+                if (id == null || id.length() > 256 || validated.size() >= 4096) {
+                    continue;
+                }
+                String trimmed = id.trim();
+                if (ResourceLocation.tryParse(trimmed) != null) {
+                    validated.add(trimmed);
+                }
+            }
+        }
+
+        customTabOrder.clear();
+        customTabOrder.addAll(validated);
     }
 
     /**
@@ -58,7 +109,7 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
         this.clientAdvancements.setListener(this);
 
         if (this.selectedTab == null && !this.tabs.isEmpty()) {
-            BetterAdvancementTab advancementTab = this.tabs.values().iterator().next();
+            BetterAdvancementTab advancementTab = this.getOrderedTabs().getFirst();
             this.clientAdvancements.setSelectedTab(advancementTab.getRootNode().holder(), true);
         } else {
             this.clientAdvancements.setSelectedTab(this.selectedTab == null ? null : this.selectedTab.getRootNode().holder(), true);
@@ -73,14 +124,17 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
         int width = right - left;
         int height = bottom - top;
 
-        int maxTabs = BetterAdvancementTabType.getMaxTabs(width, height);
+        int maxTabs = Math.max(1, BetterAdvancementTabType.getMaxTabs(width, height));
 
         if (this.tabs.size() > maxTabs) {
 
             addRenderableWidget(Button.builder(Component.literal("<"), b -> tabPage = Math.max(tabPage - 1, 0)).pos(left, bottom + 4).size(20, 20).build());
             addRenderableWidget(Button.builder(Component.literal(">"), b -> tabPage = Math.min(tabPage + 1, maxPages)).pos(right - 20, bottom + 4).size(20, 20).build());
-            maxPages = this.tabs.size() / maxTabs;
+            maxPages = (this.tabs.size() - 1) / maxTabs;
             tabPage = Math.min(tabPage, maxPages);
+        } else {
+            maxPages = 0;
+            tabPage = 0;
         }
     }
 
@@ -89,6 +143,11 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
      */
     @Override
     public void onClose() {
+        if (this.customTabOrderChanged) {
+            Services.PLATFORM.saveCustomTabOrder(getCustomTabOrder());
+            this.customTabOrderChanged = false;
+        }
+        this.draggedTab = null;
         this.clientAdvancements.setListener(null);
         ClientPacketListener clientpacketlistener = this.minecraft.getConnection();
         if (clientpacketlistener != null) {
@@ -98,38 +157,72 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int modifiers) {
-        if (modifiers == 0) {
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (button == 0) {
             int left = SIDE + (width - internalWidth) / 2;
             int top = TOP + (height - internalHeight) / 2;
-
             int right = internalWidth - SIDE + (width - internalWidth) / 2;
             int bottom = internalHeight - SIDE + (height - internalHeight) / 2;
+            int tabAreaWidth = right - left;
+            int tabAreaHeight = bottom - top;
 
-            int width = right - left;
-            int height = bottom - top;
+            int maxTabs = Math.max(1, BetterAdvancementTabType.getMaxTabs(tabAreaWidth, tabAreaHeight));
+            TabHit hit = this.findTabAt(mouseX, mouseY, left, top, tabAreaWidth, tabAreaHeight, maxTabs);
+            if (hit != null) {
+                this.clientAdvancements.setSelectedTab(hit.tab().getRootNode().holder(), true);
 
-            int maxTabs = BetterAdvancementTabType.getMaxTabs(width, height);
-            int skip = tabPage * maxTabs;
-
-            for (BetterAdvancementTab tab : this.tabs.values().stream().skip(skip).limit(maxTabs).toList()) {
-                if (tab.isMouseOver(left, top, internalWidth - 2*SIDE, internalHeight - top - BOTTOM, mouseX, mouseY)) {
-                    this.clientAdvancements.setSelectedTab(tab.getRootNode().holder(), true);
-                    break;
+                if (getTabSortMode() == TabSortMode.CUSTOM) {
+                    this.seedCustomTabOrder();
+                    this.draggedTab = hit.tab();
+                    this.customTabOrderChanged = false;
                 }
+                return true;
             }
         }
-        return super.mouseClicked(mouseX, mouseY, modifiers);
+
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (this.selectedTab != null) {
-            this.selectedTab.scroll(scrollX * 16.0, scrollY * 16.0, width, height);
+        if (this.draggedTab != null && getTabSortMode() == TabSortMode.CUSTOM && maxPages > 0 && scrollY != 0.0D) {
+            tabPage = Mth.clamp(tabPage + (scrollY < 0.0D ? 1 : -1), 0, maxPages);
             return true;
-        } else {
+        }
+
+        if (this.selectedTab == null) {
             return false;
         }
+
+        int left = SIDE + (width - internalWidth) / 2;
+        int top = TOP + (height - internalHeight) / 2;
+        int right = internalWidth - SIDE + (width - internalWidth) / 2;
+        int bottom = internalHeight - SIDE + (height - internalHeight) / 2;
+
+        int boxLeft = left + PADDING;
+        int boxTop = top + 2 * PADDING;
+        int boxRight = right - PADDING;
+        int boxBottom = bottom - PADDING;
+        int contentWidth = boxRight - boxLeft;
+        int contentHeight = boxBottom - boxTop;
+
+        double localMouseX = mouseX - boxLeft;
+        double localMouseY = mouseY - boxTop;
+        if (localMouseX >= 0 && localMouseX < contentWidth && localMouseY >= 0 && localMouseY < contentHeight) {
+            if (this.selectedTab.scrollHoveredCriteria(localMouseX, localMouseY, scrollY, contentWidth, contentHeight)) {
+                return true;
+            }
+        }
+
+        if (this.selectedTab.shouldScrollWheelHorizontally(contentWidth, contentHeight)) {
+            // Rotated portrait trees deliberately overflow along the horizontal axis at the
+            // 50% minimum scale. A normal vertical wheel therefore pans them horizontally.
+            double horizontalWheel = scrollY != 0.0D ? scrollY : scrollX;
+            this.selectedTab.scroll(horizontalWheel * 16.0D, 0.0D, contentWidth, contentHeight);
+        } else {
+            this.selectedTab.scroll(scrollX * 16.0D, scrollY * 16.0D, contentWidth, contentHeight);
+        }
+        return true;
     }
 
     @Override
@@ -147,6 +240,24 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
     public boolean mouseDragged(double mouseX, double mouseY, int button, double mouseDeltaX, double mouseDeltaY) {
         int left = SIDE + (width - internalWidth) / 2;
         int top = TOP + (height - internalHeight) / 2;
+        int contentWidth = internalWidth - 2 * SIDE - 2 * PADDING;
+        int contentHeight = internalHeight - TOP - BOTTOM - 3 * PADDING;
+
+        if (button == 0 && this.draggedTab != null && getTabSortMode() == TabSortMode.CUSTOM) {
+            int right = internalWidth - SIDE + (width - internalWidth) / 2;
+            int bottom = internalHeight - SIDE + (height - internalHeight) / 2;
+            int tabAreaWidth = right - left;
+            int tabAreaHeight = bottom - top;
+            int maxTabs = Math.max(1, BetterAdvancementTabType.getMaxTabs(tabAreaWidth, tabAreaHeight));
+            TabHit hit = this.findTabAt(mouseX, mouseY, left, top, tabAreaWidth, tabAreaHeight, maxTabs);
+
+            if (hit != null && hit.tab() != this.draggedTab) {
+                if (this.moveCustomTab(this.draggedTab, hit.tab())) {
+                    this.customTabOrderChanged = true;
+                }
+            }
+            return true;
+        }
 
         if (button != 0) {
             this.isScrolling = false;
@@ -158,7 +269,13 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
                 boolean inGui = mouseX < left + internalWidth - 2*SIDE - PADDING && mouseX > left + PADDING && mouseY < top + internalHeight - TOP + 1 && mouseY > top + 2*PADDING;
                 if (this.selectedTab != null && inGui) {
                     for (BetterAdvancementWidget betterAdvancementEntryScreen : this.selectedTab.widgets.values()) {
-                        if (betterAdvancementEntryScreen.isMouseOver(this.selectedTab.scrollX, this.selectedTab.scrollY, mouseX - left - PADDING, mouseY - top - 2*PADDING)) {
+                        if (this.selectedTab.isMouseOverWidget(
+                            betterAdvancementEntryScreen,
+                            mouseX - left - PADDING,
+                            mouseY - top - 2 * PADDING,
+                            contentWidth,
+                            contentHeight
+                        )) {
 
                             if (betterAdvancementEntryScreen.betterDisplayInfo.allowDragging())
                             {
@@ -170,8 +287,13 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
                 }
             }
             else {
-                this.advConnectedToMouse.x = (int)Math.round(this.advConnectedToMouse.x + mouseDeltaX);
-                this.advConnectedToMouse.y = (int)Math.round(this.advConnectedToMouse.y + mouseDeltaY);
+                double rawDeltaX = this.selectedTab.screenDeltaToRawX(
+                    mouseDeltaX, mouseDeltaY, contentWidth, contentHeight);
+                double rawDeltaY = this.selectedTab.screenDeltaToRawY(
+                    mouseDeltaX, mouseDeltaY, contentWidth, contentHeight);
+                this.advConnectedToMouse.x = (int)Math.round(this.advConnectedToMouse.x + rawDeltaX);
+                this.advConnectedToMouse.y = (int)Math.round(this.advConnectedToMouse.y + rawDeltaY);
+                this.selectedTab.recalculateBounds();
             }
         }
         else {
@@ -185,11 +307,25 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
             if (!this.isScrolling) {
                 this.isScrolling = true;
             } else if (this.selectedTab != null) {
-                this.selectedTab.scroll(mouseDeltaX , mouseDeltaY, internalWidth - 2 * SIDE - 3 * PADDING, internalHeight - TOP - BOTTOM - 3 * PADDING);
+                this.selectedTab.scroll(mouseDeltaX, mouseDeltaY, contentWidth, contentHeight);
             }
         }
 
         return true;
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0 && this.draggedTab != null) {
+            this.draggedTab = null;
+            if (this.customTabOrderChanged) {
+                Services.PLATFORM.saveCustomTabOrder(getCustomTabOrder());
+                this.customTabOrderChanged = false;
+            }
+            return true;
+        }
+
+        return super.mouseReleased(mouseX, mouseY, button);
     }
 
     /**
@@ -206,7 +342,7 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
         int width = right - left;
         int height = bottom - top;
 
-        int maxTabs = BetterAdvancementTabType.getMaxTabs(width, height);
+        int maxTabs = Math.max(1, BetterAdvancementTabType.getMaxTabs(width, height));
         int skip = tabPage * maxTabs;
 
         this.renderBackground(guiGraphics, mouseX, mouseY, partialTicks);
@@ -229,84 +365,92 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
             for (BetterAdvancementWidget betterAdvancementEntryScreen : this.selectedTab.widgets.values()) {
                 if (betterAdvancementEntryScreen != this.advConnectedToMouse)
                 {
-                    int x1 = betterAdvancementEntryScreen.x + left + PADDING + this.selectedTab.scrollX + 3;
-                    int x2 = this.advConnectedToMouse.x + left + PADDING + this.selectedTab.scrollX + 3;
-                    int y1 = betterAdvancementEntryScreen.y + top + 2 * PADDING + this.selectedTab.scrollY;
-                    int y2 = this.advConnectedToMouse.y + top + 2 * PADDING + this.selectedTab.scrollY;
-                    int centerX1 = betterAdvancementEntryScreen.x + left + PADDING + this.selectedTab.scrollX + 3 + BetterAdvancementWidget.ADVANCEMENT_SIZE / 2;
-                    int centerX2 = this.advConnectedToMouse.x + left + PADDING + this.selectedTab.scrollX + 3 + BetterAdvancementWidget.ADVANCEMENT_SIZE / 2;
-                    int centerY1 = betterAdvancementEntryScreen.y + top + 2 * PADDING + this.selectedTab.scrollY + BetterAdvancementWidget.ADVANCEMENT_SIZE / 2;
-                    int centerY2 = this.advConnectedToMouse.y + top + 2 * PADDING + this.selectedTab.scrollY + BetterAdvancementWidget.ADVANCEMENT_SIZE / 2;
+                    int contentWidth = right - left - 2 * PADDING;
+                    int contentHeight = bottom - top - 3 * PADDING;
+                    float treeScale = this.selectedTab.getTreeScale(contentWidth, contentHeight);
+                    int advancementSize = Math.max(1, Math.round(BetterAdvancementWidget.ADVANCEMENT_SIZE * treeScale));
+                    int widgetLayoutX = this.selectedTab.getLayoutX(betterAdvancementEntryScreen);
+                    int widgetLayoutY = this.selectedTab.getLayoutY(betterAdvancementEntryScreen);
+                    int draggedLayoutX = this.selectedTab.getLayoutX(this.advConnectedToMouse);
+                    int draggedLayoutY = this.selectedTab.getLayoutY(this.advConnectedToMouse);
+                    int x1 = left + PADDING + this.selectedTab.treeToViewX(this.selectedTab.scrollX + widgetLayoutX + 3, contentWidth);
+                    int x2 = left + PADDING + this.selectedTab.treeToViewX(this.selectedTab.scrollX + draggedLayoutX + 3, contentWidth);
+                    int y1 = top + 2 * PADDING + this.selectedTab.treeToViewY(this.selectedTab.scrollY + widgetLayoutY, contentHeight);
+                    int y2 = top + 2 * PADDING + this.selectedTab.treeToViewY(this.selectedTab.scrollY + draggedLayoutY, contentHeight);
+                    int centerX1 = x1 + advancementSize / 2;
+                    int centerX2 = x2 + advancementSize / 2;
+                    int centerY1 = y1 + advancementSize / 2;
+                    int centerY2 = y2 + advancementSize / 2;
                     double degrees = Math.toDegrees(Math.atan2(centerX1 - centerX2, centerY1 - centerY2));
                     if (degrees < 0)
                     {
                         degrees += 360;
                     }
                     
-                    if (betterAdvancementEntryScreen.x == this.advConnectedToMouse.x)
+                    if (widgetLayoutX == draggedLayoutX)
                     {
                         if (y1 > y2)
                         {
                             //Draw right
-                            RenderUtil.drawRect(x1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1, y1 + advancementSize - 1, x2, y2, 1, 0x00FF00);
                             //Draw bottom for bottom
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1 + advancementSize - 1, x2, y1 + advancementSize - 1, 1, 0x00FF00);
                             //Draw top for bottom
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x2, y1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1, x2, y1, 1, 0x00FF00);
                             //Draw bottom for top
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y2 + advancementSize - 1, x2, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw top for top
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, x2, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y2, x2, y2, 1, 0x00FF00);
                             //Draw left
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1 + advancementSize - 1, x2 + advancementSize - 1, y2, 1, 0x00FF00);
                         }
                         else
                         {
                             //Draw right
-                            RenderUtil.drawRect(x1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1, y2 + advancementSize - 1, x2, y1, 1, 0x00FF00);
                             //Draw bottom for bottom
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y2 + advancementSize - 1, x2, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw top for bottom
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, x2, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y2, x2, y2, 1, 0x00FF00);
                             //Draw bottom for top
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1 + advancementSize - 1, x2, y1 + advancementSize - 1, 1, 0x00FF00);
                             //Draw top for top
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x2, y1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1, x2, y1, 1, 0x00FF00);
                             //Draw left
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y2 + advancementSize - 1, x2 + advancementSize - 1, y1, 1, 0x00FF00);
                         }
                     }
-                    if (betterAdvancementEntryScreen.y == this.advConnectedToMouse.y)
+                    if (widgetLayoutY == draggedLayoutY)
                     {
                         if (x1 > x2)
                         {
                             //Draw top
-                            RenderUtil.drawRect(x2, y1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2, y1, x1 + advancementSize - 1, y2, 1, 0x00FF00);
                             //Draw left for right
-                            RenderUtil.drawRect(x1, y1, x1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1, y1, x1, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw right for right
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1, x1 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw left for left
-                            RenderUtil.drawRect(x2, y1, x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2, y1, x2, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw right for left
-                            RenderUtil.drawRect(x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2 + advancementSize - 1, y1, x2 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw bottom
-                            RenderUtil.drawRect(x2, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2, y1 + advancementSize - 1, x1 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                         }
                         else
                         {
                             //Draw left
-                            RenderUtil.drawRect(x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x1, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2 + advancementSize - 1, y1, x1, y2, 1, 0x00FF00);
                             //Draw left for right
-                            RenderUtil.drawRect(x2, y1, x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2, y1, x2, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw right for right
-                            RenderUtil.drawRect(x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2 + advancementSize - 1, y1, x2 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw left for left
-                            RenderUtil.drawRect(x1, y1, x1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1, y1, x1, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw right for left
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1, x1 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                             //Draw right
-                            RenderUtil.drawRect(x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x2 + advancementSize - 1, y1 + advancementSize - 1, x1, y2 + advancementSize - 1, 1, 0x00FF00);
                         }
                     }
                     if (degrees == 45 || degrees == 135 || degrees == 225 || degrees == 315)
@@ -314,32 +458,32 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
                         //Draw lines around each advancement
                         //First
                         //Top
-                        RenderUtil.drawRect(x1, y1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x1, y1, x1 + advancementSize - 1, y1, 1, 0x00FF00);
                         //Bottom
-                        RenderUtil.drawRect(x1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x1, y1 + advancementSize - 1, x1 + advancementSize - 1, y1 + advancementSize - 1, 1, 0x00FF00);
                         //Left
-                        RenderUtil.drawRect(x1, y1, x1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x1, y1, x1, y1 + advancementSize - 1, 1, 0x00FF00);
                         //Right
-                        RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x1 + advancementSize - 1, y1, x1 + advancementSize - 1, y1 + advancementSize - 1, 1, 0x00FF00);
                         //Second
                         //Top
-                        RenderUtil.drawRect(x2, y2, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, 1, 0x00FF00);
+                        RenderUtil.drawRect(x2, y2, x2 + advancementSize - 1, y2, 1, 0x00FF00);
                         //Bottom
-                        RenderUtil.drawRect(x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x2, y2 + advancementSize - 1, x2 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                         //Left
-                        RenderUtil.drawRect(x2, y2, x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x2, y2, x2, y2 + advancementSize - 1, 1, 0x00FF00);
                         //Right
-                        RenderUtil.drawRect(x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                        RenderUtil.drawRect(x2 + advancementSize - 1, y2, x2 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                         
                         if (degrees == 45 || degrees == 225)
                         {
-                            RenderUtil.drawRect(x1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1, y1 + advancementSize - 1, x2, y2 + advancementSize - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1, x2 + advancementSize - 1, y2, 1, 0x00FF00);
                         }
                         else if (degrees == 135 || degrees == 315)
                         {
                             RenderUtil.drawRect(x1, y1, x2, y2, 1, 0x00FF00);
-                            RenderUtil.drawRect(x1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y1 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, x2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, y2 + BetterAdvancementWidget.ADVANCEMENT_SIZE - 1, 1, 0x00FF00);
+                            RenderUtil.drawRect(x1 + advancementSize - 1, y1 + advancementSize - 1, x2 + advancementSize - 1, y2 + advancementSize - 1, 1, 0x00FF00);
                         }
                     }
                 }
@@ -348,24 +492,124 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
 
         if (BetterAdvancementsScreen.showDebugCoordinates && this.selectedTab != null && mouseX < internalWidth - SIDE - PADDING && mouseX > SIDE + PADDING && mouseY < internalHeight - top + 1 && mouseY > top + PADDING * 2) {
             //If dragging an advancement, draw coordinates of advancement being moved instead of mouse coordinates
+            int contentWidth = right - left - 2 * PADDING;
+            int contentHeight = bottom - top - 3 * PADDING;
             if (this.advConnectedToMouse != null) {
-                //-3 and -1 are needed to have the coordinates be rendered where the advancement starts being rendered, rather than its real position.
-                int currentX = this.advConnectedToMouse.x + left + PADDING + this.selectedTab.scrollX + 3 + 1;
-                int currentY = this.advConnectedToMouse.y + top + 2 * PADDING + this.selectedTab.scrollY - font.lineHeight + 1;
+                int layoutX = this.selectedTab.getLayoutX(this.advConnectedToMouse);
+                int layoutY = this.selectedTab.getLayoutY(this.advConnectedToMouse);
+                int currentX = left + PADDING + this.selectedTab.treeToViewX(
+                    this.selectedTab.scrollX + layoutX + 3, contentWidth);
+                int currentY = top + 2 * PADDING + this.selectedTab.treeToViewY(
+                    this.selectedTab.scrollY + layoutY, contentHeight) - font.lineHeight;
 
                 guiGraphics.drawString(font, this.advConnectedToMouse.x + "," + this.advConnectedToMouse.y, currentX, currentY, 0x000000);
             } else {
-                //Draws a string containing the current position above the mouse. Locked to inside the advancement window.
+                // Display the original, unrotated advancement coordinates under the mouse.
                 int xMouse = mouseX - left - PADDING;
                 int yMouse = mouseY - top - 2 * PADDING;
-                //-3 and -1 are needed to have the position be where the advancement starts being rendered, rather than its real position.
-                int currentX = xMouse - this.selectedTab.scrollX - 3 - 1;
-                int currentY = yMouse - this.selectedTab.scrollY - 1;
+                int currentX = this.selectedTab.viewToRawX(xMouse, yMouse, contentWidth, contentHeight);
+                int currentY = this.selectedTab.viewToRawY(xMouse, yMouse, contentWidth, contentHeight);
 
                 guiGraphics.drawString(font, currentX + "," + currentY, mouseX, mouseY - font.lineHeight, 0x000000);
             }
         }
     }
+
+    private List<BetterAdvancementTab> getOrderedTabs() {
+        List<BetterAdvancementTab> ordered = new ArrayList<>(this.tabs.values());
+        TabSortMode mode = getTabSortMode();
+
+        Comparator<BetterAdvancementTab> alphabetical = Comparator
+            .comparing((BetterAdvancementTab tab) -> tab.getTitle().getString().toLowerCase(Locale.ROOT))
+            .thenComparing(tab -> tab.getRootNode().holder().id().toString());
+
+        switch (mode) {
+            case ALPHABETICAL -> ordered.sort(alphabetical);
+            case COMPLETION -> {
+                // Completion is derived from every displayed advancement in a tab. Cache it once per
+                // ordering pass so Comparator calls do not repeatedly walk every widget each frame.
+                Map<BetterAdvancementTab, Float> completion = new IdentityHashMap<>();
+                for (BetterAdvancementTab tab : ordered) {
+                    completion.put(tab, tab.getCompletionProgress());
+                }
+                ordered.sort(
+                    Comparator.comparingDouble((BetterAdvancementTab tab) -> completion.get(tab))
+                        .reversed()
+                        .thenComparing(alphabetical)
+                );
+            }
+            case CUSTOM -> {
+                Map<String, Integer> positions = new java.util.HashMap<>();
+                for (int i = 0; i < customTabOrder.size(); i++) {
+                    positions.putIfAbsent(customTabOrder.get(i), i);
+                }
+                ordered.sort(Comparator.comparingInt(tab ->
+                    positions.getOrDefault(tab.getRootNode().holder().id().toString(), Integer.MAX_VALUE)
+                ));
+            }
+            case ORIGINAL -> {
+                // LinkedHashMap insertion order is already the original root order.
+            }
+        }
+
+        return ordered;
+    }
+
+    private TabHit findTabAt(
+        double mouseX,
+        double mouseY,
+        int left,
+        int top,
+        int tabAreaWidth,
+        int tabAreaHeight,
+        int maxTabs
+    ) {
+        if (maxTabs <= 0) {
+            return null;
+        }
+
+        List<BetterAdvancementTab> orderedTabs = this.getOrderedTabs();
+        int skip = tabPage * maxTabs;
+        int end = Math.min(skip + maxTabs, orderedTabs.size());
+
+        for (int displayIndex = skip; displayIndex < end; displayIndex++) {
+            BetterAdvancementTab tab = orderedTabs.get(displayIndex);
+            if (tab.isMouseOver(left, top, tabAreaWidth, tabAreaHeight, displayIndex, mouseX, mouseY)) {
+                return new TabHit(tab, displayIndex);
+            }
+        }
+
+        return null;
+    }
+
+    private void seedCustomTabOrder() {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        for (BetterAdvancementTab tab : this.getOrderedTabs()) {
+            merged.add(tab.getRootNode().holder().id().toString());
+        }
+        merged.addAll(customTabOrder);
+        setCustomTabOrder(merged);
+    }
+
+    private boolean moveCustomTab(BetterAdvancementTab dragged, BetterAdvancementTab target) {
+        String draggedId = dragged.getRootNode().holder().id().toString();
+        String targetId = target.getRootNode().holder().id().toString();
+        int draggedIndex = customTabOrder.indexOf(draggedId);
+        int targetIndex = customTabOrder.indexOf(targetId);
+
+        if (draggedIndex < 0 || targetIndex < 0 || draggedIndex == targetIndex) {
+            return false;
+        }
+
+        // Move instead of swapping. A fast drag can skip intermediate tabs; swapping in that
+        // case would unexpectedly move the target all the way back to the dragged tab's old
+        // position. Removing and inserting keeps every intervening tab in relative order.
+        customTabOrder.remove(draggedIndex);
+        customTabOrder.add(Math.min(targetIndex, customTabOrder.size()), draggedId);
+        return true;
+    }
+
+    private record TabHit(BetterAdvancementTab tab, int displayIndex) {}
 
     private void renderInside(GuiGraphics guiGraphics, int mouseX, int mouseY, int left, int top, int right, int bottom, int maxTabs, int skip) {
         BetterAdvancementTab betterAdvancementTab = this.selectedTab;
@@ -409,14 +653,18 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
         int height = bottom - top;
 
         if (this.tabs.size() > 1) {
-            for (BetterAdvancementTab tab : this.tabs.values().stream().skip(skip).limit(maxTabs).toList()) {
-                tab.drawTab(guiGraphics, left, top, width, height, tab == this.selectedTab);
+            List<BetterAdvancementTab> orderedTabs = this.getOrderedTabs();
+            int end = Math.min(skip + maxTabs, orderedTabs.size());
+
+            for (int displayIndex = skip; displayIndex < end; displayIndex++) {
+                BetterAdvancementTab tab = orderedTabs.get(displayIndex);
+                tab.drawTab(guiGraphics, left, top, width, height, tab == this.selectedTab, displayIndex);
             }
 
             RenderSystem.defaultBlendFunc();
 
-            for (BetterAdvancementTab tab : this.tabs.values().stream().skip(skip).limit(maxTabs).toList()) {
-                tab.drawIcon(guiGraphics, left, top, width, height);
+            for (int displayIndex = skip; displayIndex < end; displayIndex++) {
+                orderedTabs.get(displayIndex).drawIcon(guiGraphics, left, top, width, height, displayIndex);
             }
 
             RenderSystem.disableBlend();
@@ -440,7 +688,14 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
             guiGraphics.pose().pushPose();
             guiGraphics.pose().translate(left + PADDING, top + 2*PADDING, 400.0D);
             RenderSystem.enableDepthTest();
-            this.selectedTab.drawToolTips(guiGraphics,mouseX - left - PADDING, mouseY - top - 2*PADDING, left, top, right - left - 2*PADDING, bottom - top - 3*PADDING);
+            this.selectedTab.drawToolTips(
+                guiGraphics,
+                mouseX - left - PADDING,
+                mouseY - top - 2 * PADDING,
+                left + PADDING,
+                top + 2 * PADDING,
+                right - left - 2 * PADDING,
+                bottom - top - 3 * PADDING);
             RenderSystem.disableDepthTest();
             guiGraphics.pose().popPose();
         }
@@ -449,8 +704,11 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
         int height = bottom - top;
 
         if (this.tabs.size() > 1) {
-            for (BetterAdvancementTab tab : this.tabs.values().stream().skip(skip).limit(maxTabs).toList()) {
-                if (tab.isMouseOver(left, top, width, height, mouseX, mouseY)) {
+            List<BetterAdvancementTab> orderedTabs = this.getOrderedTabs();
+            int end = Math.min(skip + maxTabs, orderedTabs.size());
+            for (int displayIndex = skip; displayIndex < end; displayIndex++) {
+                BetterAdvancementTab tab = orderedTabs.get(displayIndex);
+                if (tab.isMouseOver(left, top, width, height, displayIndex, mouseX, mouseY)) {
                     guiGraphics.renderTooltip(this.font, tab.getTitle(), mouseX, mouseY);
                 }
             }
@@ -459,7 +717,7 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
 
     @Override
     public void onAddAdvancementRoot(AdvancementNode advancement) {
-        BetterAdvancementTab betterAdvancementTabGui = BetterAdvancementTab.create(this.minecraft, this, this.tabs.size(), advancement, internalWidth - 2*SIDE, internalHeight - TOP - SIDE);
+        BetterAdvancementTab betterAdvancementTabGui = BetterAdvancementTab.create(this.minecraft, this, advancement);
 
         if (betterAdvancementTabGui != null) {
             this.tabs.put(advancement.holder(), betterAdvancementTabGui);
@@ -507,6 +765,8 @@ public class BetterAdvancementsScreen extends Screen implements ClientAdvancemen
     public void onAdvancementsCleared() {
         this.tabs.clear();
         this.selectedTab = null;
+        this.draggedTab = null;
+        this.customTabOrderChanged = false;
     }
 
     public BetterAdvancementWidget getAdvancementWidget(AdvancementNode advancement) {

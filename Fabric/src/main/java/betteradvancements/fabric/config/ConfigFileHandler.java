@@ -9,7 +9,10 @@ import betteradvancements.common.reference.Constants;
 import betteradvancements.common.util.ColorHelper;
 import betteradvancements.common.util.CriteriaDetail;
 import betteradvancements.common.util.CriterionGrid;
+import betteradvancements.common.util.TabSortMode;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.fabricmc.loader.api.FabricLoader;
@@ -51,8 +54,16 @@ public class ConfigFileHandler {
         if (root.has("showDebugCoordinates")) {
             BetterAdvancementsScreen.showDebugCoordinates = root.get("showDebugCoordinates").getAsBoolean();
         }
-        if (root.has("orderTabsAlphabetically")) {
-            BetterAdvancementsScreen.orderTabsAlphabetically = root.get("orderTabsAlphabetically").getAsBoolean();
+        if (root.has("tabSortMode")) {
+            BetterAdvancementsScreen.setTabSortMode(readTabSortMode(root, "tabSortMode"));
+        } else if (root.has("orderTabsAlphabetically")) {
+            boolean legacyAlphabetical = readBoolean(root, "orderTabsAlphabetically", false);
+            BetterAdvancementsScreen.setTabSortMode(
+                legacyAlphabetical ? TabSortMode.ALPHABETICAL : TabSortMode.ORIGINAL
+            );
+        }
+        if (root.has("customTabOrder")) {
+            BetterAdvancementsScreen.setCustomTabOrder(readCustomTabOrder(root, "customTabOrder"));
         }
         if (root.has("uiScaling")) {
             BetterAdvancementsScreen.uiScaling = root.get("uiScaling").getAsInt();
@@ -62,6 +73,9 @@ public class ConfigFileHandler {
         }
         if (root.has("criteriaDetailRequiresShift")) {
             CriterionGrid.requiresShift = root.get("criteriaDetailRequiresShift").getAsBoolean();
+        }
+        if (root.has("sortCriteriaAlphabetically")) {
+            CriterionGrid.sortAlphabetically = readBoolean(root, "sortCriteriaAlphabetically", true);
         }
         if (root.has("addInventoryButton")) {
             BetterAdvancementsScreenButton.addToInventory = root.get("addInventoryButton").getAsBoolean();
@@ -110,10 +124,17 @@ public class ConfigFileHandler {
         root.addProperty("defaultCompletedTitleColor", ColorHelper.asRGBString(BetterDisplayInfo.defaultCompletedTitleColor));
         root.addProperty("doAdvancementsBackgroundFade", BetterAdvancementTab.doFade);
         root.addProperty("showDebugCoordinates", BetterAdvancementsScreen.showDebugCoordinates);
-        root.addProperty("orderTabsAlphabetically", BetterAdvancementsScreen.orderTabsAlphabetically);
+        root.addProperty("orderTabsAlphabetically", BetterAdvancementsScreen.getTabSortMode() == TabSortMode.ALPHABETICAL);
+        root.addProperty("tabSortMode", BetterAdvancementsScreen.getTabSortMode().name());
+        JsonArray customOrder = new JsonArray();
+        for (String id : BetterAdvancementsScreen.getCustomTabOrder()) {
+            customOrder.add(id);
+        }
+        root.add("customTabOrder", customOrder);
         root.addProperty("uiScaling", BetterAdvancementsScreen.uiScaling);
         root.addProperty("criteriaDetail", CriterionGrid.detailLevel.getName());
         root.addProperty("criteriaDetailRequiresShift", CriterionGrid.requiresShift);
+        root.addProperty("sortCriteriaAlphabetically", CriterionGrid.sortAlphabetically);
         root.addProperty("addInventoryButton", BetterAdvancementsScreenButton.addToInventory);
         root.addProperty("defaultDrawDirectLines", BetterDisplayInfo.defaultDrawDirectLines);
         root.addProperty("defaultHideLines", BetterDisplayInfo.defaultHideLines);
@@ -172,6 +193,39 @@ public class ConfigFileHandler {
             Constants.log.warn("Invalid {} value; using {}", key, BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_DIRECTION);
             return BetterAdvancementTab.DEFAULT_BACKGROUND_PROGRESS_DIRECTION;
         }
+    }
+
+    private static TabSortMode readTabSortMode(JsonObject root, String key) {
+        try {
+            String value = root.get(key).getAsString();
+            TabSortMode parsed = TabSortMode.fromName(value);
+            if (!parsed.name().equalsIgnoreCase(value)) {
+                Constants.log.warn("Invalid {} value '{}'; using {}", key, value, TabSortMode.ORIGINAL);
+            }
+            return parsed;
+        } catch (RuntimeException e) {
+            Constants.log.warn("Invalid {} value; using {}", key, TabSortMode.ORIGINAL);
+            return TabSortMode.ORIGINAL;
+        }
+    }
+
+    private static java.util.List<String> readCustomTabOrder(JsonObject root, String key) {
+        java.util.List<String> order = new java.util.ArrayList<>();
+        try {
+            JsonArray array = root.getAsJsonArray(key);
+            for (JsonElement element : array) {
+                if (order.size() >= 4096) {
+                    Constants.log.warn("{} contains more than 4096 entries; ignoring the remainder", key);
+                    break;
+                }
+                if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
+                    order.add(element.getAsString());
+                }
+            }
+        } catch (RuntimeException e) {
+            Constants.log.warn("Invalid {} value; using an empty custom tab order", key);
+        }
+        return order;
     }
 
     private static int readArgb(JsonObject root, String key, int defaultValue) {

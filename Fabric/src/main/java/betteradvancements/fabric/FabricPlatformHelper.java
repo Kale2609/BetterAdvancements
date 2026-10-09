@@ -3,6 +3,9 @@ package betteradvancements.fabric;
 import betteradvancements.common.platform.IAdvancementVisitor;
 import betteradvancements.common.platform.IEventHelper;
 import betteradvancements.common.platform.IPlatformHelper;
+import betteradvancements.fabric.config.ConfigFileHandler;
+
+import java.util.List;
 
 public class FabricPlatformHelper implements IPlatformHelper {
     private final FabricEventHelper eventHelper = new FabricEventHelper();
@@ -21,5 +24,10 @@ public class FabricPlatformHelper implements IPlatformHelper {
     @Override
     public IAdvancementVisitor getAdvancementVisitor() {
         return advancementVisitor;
+    }
+
+    @Override
+    public void saveCustomTabOrder(List<String> order) {
+        ConfigFileHandler.writeToConfig();
     }
 }

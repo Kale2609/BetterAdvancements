@@ -39,6 +39,14 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
     private int width;
     private List<FormattedCharSequence> description;
     private CriterionGrid criterionGrid;
+    private int criterionPage;
+    private int criterionPageCount = 1;
+    private boolean criterionPanelDetached;
+    private boolean detachedPanelHitBoxValid;
+    private int detachedPanelX;
+    private int detachedPanelY;
+    private int detachedPanelWidth;
+    private int detachedPanelHeight;
     private final Minecraft minecraft;
     private BetterAdvancementWidget parent;
     private final List<BetterAdvancementWidget> children = Lists.newArrayList();
@@ -60,53 +68,85 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
     }
 
     private void refreshHover() {
-        Minecraft mc = this.minecraft;
-        int k = 0;
-        if (this.advancementNode.advancement().requirements().size() > 1) {
-            // Add some space for the requirement counter
-            int strLengthRequirementCount = String.valueOf(this.advancementNode.advancement().requirements().size()).length();
-            k = mc.font.width("  ") + mc.font.width("0") * strLengthRequirementCount * 2 + mc.font.width("/");
-        }
-        int titleWidth = 29 + mc.font.width(this.title) + k;
-        BetterAdvancementsScreen screen = betterAdvancementTabGui.getScreen();
-        this.criterionGrid = CriterionGrid.findOptimalCriterionGrid(this.advancementNode.holder(), this.advancementNode.advancement(), advancementProgress, screen.width / 2, mc.font);
-        int maxWidth;
-        
-        if (!CriterionGrid.requiresShift || Screen.hasShiftDown()) {
-            maxWidth = Math.max(titleWidth, this.criterionGrid.width);
-        }
-        else {
-            maxWidth =  titleWidth;
-        }
-        this.description = Language.getInstance().getVisualOrder(
-            this.findOptimalLines(ComponentUtils.mergeStyles(
-                displayInfo.getDescription().copy(),
-                Style.EMPTY.withColor(displayInfo.getType().getChatColor())
-            ), maxWidth));
-
-        for (FormattedCharSequence line : this.description) {
-            maxWidth = Math.max(maxWidth, mc.font.width(line));
-        }
-
-        this.width = maxWidth + 8;
+        int fallbackWidth = Math.max(64, this.betterAdvancementTabGui.getScreen().width - 32);
+        this.refreshHover(fallbackWidth);
     }
 
-    private List<FormattedText> findOptimalLines(Component line, int width) {
+    private void refreshHover(int availableWidth) {
+        Minecraft mc = this.minecraft;
+        int maxPanelWidth = Math.max(1, availableWidth);
+        int maxContentWidth = Math.max(1, maxPanelWidth - 8);
+
+        int progressWidth = 0;
+        if (this.advancementProgress != null && this.advancementProgress.getProgressText() != null) {
+            progressWidth = mc.font.width(this.advancementProgress.getProgressText());
+        }
+
+        // 32 px for the icon/title offset, 5 px right padding and, when present,
+        // another 8 px gap before the progress counter.
+        int requiredHeaderWidth = 32 + mc.font.width(this.title) + 5;
+        if (progressWidth > 0) {
+            requiredHeaderWidth += progressWidth + 8;
+        }
+        int titleWidth = Math.min(maxContentWidth, requiredHeaderWidth);
+        this.criterionGrid = CriterionGrid.findOptimalCriterionGrid(
+            this.advancementNode.holder(),
+            this.advancementNode.advancement(),
+            this.advancementProgress,
+            maxContentWidth,
+            mc.font
+        );
+
+        int maxWidth;
+        if (!CriterionGrid.requiresShift || Screen.hasShiftDown()) {
+            maxWidth = Math.max(titleWidth, Math.min(maxContentWidth, this.criterionGrid.width));
+        } else {
+            maxWidth = titleWidth;
+        }
+
+        this.description = Language.getInstance().getVisualOrder(
+            this.findOptimalLines(
+                ComponentUtils.mergeStyles(
+                    displayInfo.getDescription().copy(),
+                    Style.EMPTY.withColor(displayInfo.getType().getChatColor())
+                ),
+                maxWidth,
+                maxContentWidth
+            )
+        );
+
+        for (FormattedCharSequence line : this.description) {
+            maxWidth = Math.max(maxWidth, Math.min(maxContentWidth, mc.font.width(line)));
+        }
+
+        this.width = Math.min(maxPanelWidth, maxWidth + 8);
+    }
+
+    private List<FormattedText> findOptimalLines(Component line, int width, int maxWidth) {
         if (line.getString().isEmpty()) {
             return Collections.emptyList();
-        } else {
-            StringSplitter stringsplitter = this.minecraft.font.getSplitter();
-            List<FormattedText> list = stringsplitter.splitLines(line, width, Style.EMPTY);
-            if (list.size() > 1) {
-                width = Math.max(width, betterAdvancementTabGui.getScreen().internalWidth / 4);
-                list = stringsplitter.splitLines(line, width, Style.EMPTY);
-            }
-            while (list.size() > 5 && width < WIDGET_WIDTH * 1.5 && width < betterAdvancementTabGui.getScreen().internalWidth / 2.5) {
-                width += width / 4;
-                list = stringsplitter.splitLines(line, width, Style.EMPTY);
-            }
-            return list;
         }
+
+        StringSplitter stringsplitter = this.minecraft.font.getSplitter();
+        int safeWidth = Math.max(1, Math.min(width, maxWidth));
+        List<FormattedText> list = stringsplitter.splitLines(line, safeWidth, Style.EMPTY);
+
+        if (list.size() > 1) {
+            int preferredWidth = Math.max(safeWidth, this.betterAdvancementTabGui.getScreen().internalWidth / 4);
+            safeWidth = Math.min(maxWidth, preferredWidth);
+            list = stringsplitter.splitLines(line, safeWidth, Style.EMPTY);
+        }
+
+        while (list.size() > 5 && safeWidth < maxWidth) {
+            int nextWidth = Math.min(maxWidth, safeWidth + Math.max(1, safeWidth / 4));
+            if (nextWidth == safeWidth) {
+                break;
+            }
+            safeWidth = nextWidth;
+            list = stringsplitter.splitLines(line, safeWidth, Style.EMPTY);
+        }
+
+        return list;
     }
 
     private BetterAdvancementWidget getFirstVisibleParent(AdvancementNode advancement) {
@@ -155,11 +195,16 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
         int innerLineColor = this.advancementProgress != null && this.advancementProgress.isDone() ? betterDisplayInfo.getCompletedLineColor() : betterDisplayInfo.getUnCompletedLineColor();
         int borderLineColor = 0xFF000000;
         
+        int thisLayoutX = this.betterAdvancementTabGui.getLayoutX(this);
+        int thisLayoutY = this.betterAdvancementTabGui.getLayoutY(this);
+        int parentLayoutX = this.betterAdvancementTabGui.getLayoutX(parent);
+        int parentLayoutY = this.betterAdvancementTabGui.getLayoutY(parent);
+
         if (this.betterDisplayInfo.drawDirectLines()) {
-            float x1 = scrollX + this.x + ADVANCEMENT_SIZE / 2 + 3;
-            float y1 = scrollY + this.y + ADVANCEMENT_SIZE / 2;
-            float x2 = scrollX + parent.x + ADVANCEMENT_SIZE / 2 + 3;
-            float y2 = scrollY + parent.y + ADVANCEMENT_SIZE / 2;
+            float x1 = scrollX + thisLayoutX + ADVANCEMENT_SIZE / 2 + 3;
+            float y1 = scrollY + thisLayoutY + ADVANCEMENT_SIZE / 2;
+            float x2 = scrollX + parentLayoutX + ADVANCEMENT_SIZE / 2 + 3;
+            float y2 = scrollY + parentLayoutY + ADVANCEMENT_SIZE / 2;
 
             float width;
             boolean perpendicular = x1 == x2 || y1 == y2;
@@ -190,12 +235,36 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
                 }
             }
         }
+        else if (this.betterAdvancementTabGui.isTreeRotated()) {
+            // The normal Minecraft layout grows left-to-right. After rotating a portrait tree,
+            // preserve the same elbow shape, rotated 90 degrees, so descendants grow downward.
+            int startX = scrollX + parentLayoutX + ADVANCEMENT_SIZE / 2;
+            int startY = scrollY + parentLayoutY + ADVANCEMENT_SIZE / 2;
+            int endYHalf = scrollY + parentLayoutY + ADVANCEMENT_SIZE + 6; // rotated 32 px step
+            int endX = scrollX + thisLayoutX + ADVANCEMENT_SIZE / 2;
+            int endY = scrollY + thisLayoutY + ADVANCEMENT_SIZE / 2;
+
+            if (drawInside) {
+                guiGraphics.vLine(startX - 1, endYHalf, startY, borderLineColor);
+                guiGraphics.vLine(startX, endYHalf + 1, startY, borderLineColor);
+                guiGraphics.vLine(startX + 1, endYHalf, startY, borderLineColor);
+                guiGraphics.vLine(endX - 1, endY, endYHalf - 1, borderLineColor);
+                guiGraphics.vLine(endX, endY, endYHalf - 1, borderLineColor);
+                guiGraphics.vLine(endX + 1, endY, endYHalf - 1, borderLineColor);
+                guiGraphics.hLine(endX, startX, endYHalf - 1, borderLineColor);
+                guiGraphics.hLine(endX, startX, endYHalf + 1, borderLineColor);
+            } else {
+                guiGraphics.vLine(startX, endYHalf, startY, innerLineColor);
+                guiGraphics.vLine(endX, endY, endYHalf, innerLineColor);
+                guiGraphics.hLine(endX, startX, endYHalf, innerLineColor);
+            }
+        }
         else {
-            int startX = scrollX + parent.x + ADVANCEMENT_SIZE / 2;
-            int endXHalf = scrollX + parent.x + ADVANCEMENT_SIZE + 6; // 6 = 32 - 26
-            int startY = scrollY + parent.y + ADVANCEMENT_SIZE / 2;
-            int endX = scrollX + this.x + ADVANCEMENT_SIZE / 2;
-            int endY = scrollY + this.y + ADVANCEMENT_SIZE / 2;
+            int startX = scrollX + parentLayoutX + ADVANCEMENT_SIZE / 2;
+            int endXHalf = scrollX + parentLayoutX + ADVANCEMENT_SIZE + 6; // 6 = 32 - 26
+            int startY = scrollY + parentLayoutY + ADVANCEMENT_SIZE / 2;
+            int endX = scrollX + thisLayoutX + ADVANCEMENT_SIZE / 2;
+            int endY = scrollY + thisLayoutY + ADVANCEMENT_SIZE / 2;
             
             if (drawInside) {
                 guiGraphics.hLine(endXHalf, startX, startY - 1, borderLineColor);
@@ -215,6 +284,8 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
     }
 
     public void draw(GuiGraphics guiGraphics, int scrollX, int scrollY) {
+        int layoutX = this.betterAdvancementTabGui.getLayoutX(this);
+        int layoutY = this.betterAdvancementTabGui.getLayoutY(this);
         if (!this.displayInfo.isHidden() || this.advancementProgress != null && this.advancementProgress.isDone()) {
             float f = this.advancementProgress == null ? 0.0F : this.advancementProgress.getPercent();
             AdvancementWidgetType advancementState;
@@ -227,9 +298,9 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
 
             RenderUtil.setColor(betterDisplayInfo.getIconColor(advancementState));
             RenderSystem.enableBlend();
-            guiGraphics.blitSprite(advancementState.frameSprite(this.displayInfo.getType()), scrollX + this.x + 3, scrollY + this.y, ICON_SIZE, ICON_SIZE);
+            guiGraphics.blitSprite(advancementState.frameSprite(this.displayInfo.getType()), scrollX + layoutX + 3, scrollY + layoutY, ICON_SIZE, ICON_SIZE);
             RenderUtil.setColor(betterDisplayInfo.defaultIconColor());
-            guiGraphics.renderFakeItem(this.displayInfo.getIcon(), scrollX + this.x + 8, scrollY + this.y + 5);
+            guiGraphics.renderFakeItem(this.displayInfo.getIcon(), scrollX + layoutX + 8, scrollY + layoutY + 5);
         }
 
         for (BetterAdvancementWidget betterAdvancementWidget : this.children) {
@@ -243,6 +314,10 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
 
     public void getAdvancementProgress(AdvancementProgress advancementProgressIn) {
         this.advancementProgress = advancementProgressIn;
+        this.criterionPage = 0;
+        this.criterionPageCount = 1;
+        this.criterionPanelDetached = false;
+        this.detachedPanelHitBoxValid = false;
         this.refreshHover();
     }
 
@@ -250,43 +325,188 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
         this.children.add(betterAdvancementEntryScreen);
     }
 
-    public void drawHover(GuiGraphics guiGraphics, int scrollX, int scrollY, float fade, int left, int top) {
-        this.refreshHover();
-        boolean drawLeft = left + scrollX + this.x + this.width + ADVANCEMENT_SIZE >= this.betterAdvancementTabGui.getScreen().internalWidth;
-        String s = this.advancementProgress == null || this.advancementProgress.getProgressText() == null ? null : this.advancementProgress.getProgressText().getString();
-        int i = s == null ? 0 : this.minecraft.font.width(s);
-        boolean drawTop;
-        
-        if (!CriterionGrid.requiresShift || Screen.hasShiftDown()) {
-            if (this.criterionGrid.height < this.betterAdvancementTabGui.getScreen().height) {
-                drawTop = top + scrollY + this.y + this.description.size() * this.minecraft.font.lineHeight + this.criterionGrid.height + 50 >= this.betterAdvancementTabGui.getScreen().height;
-            } else {
-                // Always draw on the bottom if the grid is larger than the screen
-                drawTop = false;
-            }
+    public void drawHover(
+        GuiGraphics guiGraphics,
+        int nodeX,
+        int nodeY,
+        float fade,
+        int contentWidth,
+        int contentHeight,
+        int contentScreenX,
+        int contentScreenY
+    ) {
+        this.refreshHover(contentWidth);
+        this.detachedPanelHitBoxValid = false;
+
+        // A very small custom UI scale can leave less room than the tooltip sprites themselves.
+        // In that case, do not attempt negative-sized 9-slice rendering.
+        if (contentWidth < CORNER_SIZE * 2 || contentHeight < WIDGET_HEIGHT) {
+            this.criterionPage = 0;
+            this.criterionPageCount = 1;
+            this.criterionPanelDetached = false;
+            return;
         }
-        else {
-            drawTop = top + scrollY + this.y + this.description.size() * this.minecraft.font.lineHeight + 50 >= this.betterAdvancementTabGui.getScreen().height;
+
+        String progressText = this.advancementProgress == null || this.advancementProgress.getProgressText() == null
+            ? null
+            : this.advancementProgress.getProgressText().getString();
+        int progressTextWidth = progressText == null ? 0 : this.minecraft.font.width(progressText);
+        int renderWidth = this.width;
+
+        boolean showCriteria = this.criterionGrid != null
+            && !this.criterionGrid.isEmpty()
+            && (!CriterionGrid.requiresShift || Screen.hasShiftDown());
+
+        int descriptionHeight = this.description.size() * this.minecraft.font.lineHeight;
+        int fullCriteriaHeight = showCriteria ? this.criterionGrid.height : 0;
+        int fullBoxHeight = TITLE_SIZE + descriptionHeight + fullCriteriaHeight;
+
+        // Detach only when the criteria make the complete hover body too tall for both
+        // the space below and the space above the hovered node. Horizontal pressure alone
+        // is handled by clamping the normal tooltip inside the content area.
+        int spaceBelow = Math.max(0, contentHeight - nodeY);
+        int spaceAbove = Math.max(0, nodeY + ADVANCEMENT_SIZE);
+        boolean verticalFits = fullBoxHeight <= Math.max(spaceBelow, spaceAbove);
+        boolean detached = showCriteria && !verticalFits;
+        this.criterionPanelDetached = detached;
+
+        CriterionGrid pageGrid;
+        int pageIndicatorHeight = 0;
+        int boxHeight;
+        int drawX;
+        int titleY;
+        int backgroundY;
+        int descriptionY;
+        boolean drawLeft = false;
+        boolean drawAbove = false;
+
+        if (detached) {
+            int availableCriteriaHeight = contentHeight - TITLE_SIZE - descriptionHeight;
+            boolean criteriaFit = availableCriteriaHeight >= this.minecraft.font.lineHeight;
+            List<CriterionGrid> pages = List.of();
+
+            if (criteriaFit) {
+                int rowsPerPage = Math.max(1, availableCriteriaHeight / this.minecraft.font.lineHeight);
+                int criterionContentWidth = Math.max(1, contentWidth - 8);
+                pages = this.criterionGrid.getPages(rowsPerPage, criterionContentWidth);
+
+                // If pagination is necessary, always reserve one visible line for its indicator
+                // when the window can hold at least one criterion row plus the indicator.
+                if (pages.size() > 1 && availableCriteriaHeight >= this.minecraft.font.lineHeight * 2) {
+                    pageIndicatorHeight = this.minecraft.font.lineHeight;
+                    rowsPerPage = Math.max(
+                        1,
+                        (availableCriteriaHeight - pageIndicatorHeight) / this.minecraft.font.lineHeight
+                    );
+                    pages = this.criterionGrid.getPages(rowsPerPage, criterionContentWidth);
+                }
+
+                this.criterionPageCount = Math.max(1, pages.size());
+                this.criterionPage = Mth.clamp(this.criterionPage, 0, this.criterionPageCount - 1);
+                pageGrid = pages.get(this.criterionPage);
+            } else {
+                this.criterionPage = 0;
+                this.criterionPageCount = 1;
+                pageGrid = null;
+            }
+
+            // Size a detached panel to its actual content instead of retaining the width of
+            // the full pre-pagination grid. This removes the large empty block visible when a
+            // narrow page was rendered inside a very wide original grid.
+            int headerContentWidth = 32 + this.minecraft.font.width(this.title) + 5;
+            if (progressTextWidth > 0) {
+                headerContentWidth += progressTextWidth + 8;
+            }
+            int descriptionContentWidth = 0;
+            for (FormattedCharSequence line : this.description) {
+                descriptionContentWidth = Math.max(descriptionContentWidth, this.minecraft.font.width(line));
+            }
+            int criteriaContentWidth = 0;
+            for (CriterionGrid page : pages) {
+                criteriaContentWidth = Math.max(criteriaContentWidth, page.width);
+            }
+            int pageIndicatorContentWidth = 0;
+            if (this.criterionPageCount > 1) {
+                pageIndicatorContentWidth = this.minecraft.font.width(
+                    Component.translatable("betteradvancements.criteria_page", this.criterionPage + 1, this.criterionPageCount)
+                );
+            }
+            int detachedWidth = Math.max(
+                CORNER_SIZE * 2,
+                Math.min(
+                    contentWidth,
+                    Math.max(
+                        headerContentWidth,
+                        Math.max(descriptionContentWidth, Math.max(criteriaContentWidth, pageIndicatorContentWidth))
+                    ) + 8
+                )
+            );
+            renderWidth = detachedWidth;
+
+            int criteriaHeight = pageGrid == null ? 0 : pageGrid.height;
+            boxHeight = TITLE_SIZE + descriptionHeight + criteriaHeight + pageIndicatorHeight;
+            boxHeight = Math.min(contentHeight, Math.max(TITLE_SIZE, boxHeight));
+
+            drawX = Mth.clamp(nodeX, 0, Math.max(0, contentWidth - renderWidth));
+            titleY = 0;
+            backgroundY = 0;
+            descriptionY = WIDGET_HEIGHT;
+
+            this.detachedPanelX = drawX;
+            this.detachedPanelY = backgroundY;
+            this.detachedPanelWidth = renderWidth;
+            this.detachedPanelHeight = boxHeight;
+            this.detachedPanelHitBoxValid = this.criterionPageCount > 1;
+
+            guiGraphics.enableScissor(
+                contentScreenX + drawX,
+                contentScreenY + backgroundY,
+                contentScreenX + drawX + renderWidth,
+                contentScreenY + backgroundY + boxHeight
+            );
+        } else {
+            // Normal-sized hover windows retain the original BetterAdvancements behaviour:
+            // title/icon remain attached to the hovered node and the body opens below it when
+            // possible, otherwise above it. No pagination is necessary in this mode.
+            this.criterionPage = 0;
+            this.criterionPageCount = 1;
+            pageGrid = showCriteria ? this.criterionGrid : null;
+            boxHeight = fullBoxHeight;
+
+            int rightDrawX = nodeX;
+            int leftDrawX = nodeX - renderWidth + ADVANCEMENT_SIZE + 6;
+            boolean rightFits = rightDrawX + renderWidth <= contentWidth;
+            boolean leftFits = leftDrawX >= 0;
+            drawLeft = rightFits ? false : leftFits || nodeX > contentWidth / 2;
+            int preferredDrawX = drawLeft ? leftDrawX : rightDrawX;
+            drawX = Mth.clamp(preferredDrawX, 0, Math.max(0, contentWidth - renderWidth));
+
+            boolean belowFits = fullBoxHeight <= spaceBelow;
+            boolean aboveFits = fullBoxHeight <= spaceAbove;
+            drawAbove = !belowFits && aboveFits;
+            titleY = nodeY;
+            backgroundY = drawAbove ? nodeY + ADVANCEMENT_SIZE - boxHeight : nodeY;
+            descriptionY = drawAbove ? backgroundY + 7 : nodeY + WIDGET_HEIGHT;
         }
 
         float percentageObtained = this.advancementProgress == null ? 0.0F : this.advancementProgress.getPercent();
-        int j = Mth.floor(percentageObtained * (float) this.width);
+        int obtainedWidth = Mth.floor(percentageObtained * (float) renderWidth);
         AdvancementWidgetType stateTitleLeft;
         AdvancementWidgetType stateTitleRight;
         AdvancementWidgetType stateIcon;
 
         if (percentageObtained >= 1.0F) {
-            j = this.width / 2;
+            obtainedWidth = renderWidth / 2;
             stateTitleLeft = AdvancementWidgetType.OBTAINED;
             stateTitleRight = AdvancementWidgetType.OBTAINED;
             stateIcon = AdvancementWidgetType.OBTAINED;
-        } else if (j < 2) {
-            j = this.width / 2;
+        } else if (obtainedWidth < 2) {
+            obtainedWidth = renderWidth / 2;
             stateTitleLeft = AdvancementWidgetType.UNOBTAINED;
             stateTitleRight = AdvancementWidgetType.UNOBTAINED;
             stateIcon = AdvancementWidgetType.UNOBTAINED;
-        } else if (j > this.width - 2) {
-            j = this.width / 2;
+        } else if (obtainedWidth > renderWidth - 2) {
+            obtainedWidth = renderWidth / 2;
             stateTitleLeft = AdvancementWidgetType.OBTAINED;
             stateTitleRight = AdvancementWidgetType.OBTAINED;
             stateIcon = AdvancementWidgetType.UNOBTAINED;
@@ -296,89 +516,215 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
             stateIcon = AdvancementWidgetType.UNOBTAINED;
         }
 
-        int k = this.width - j;
         RenderSystem.enableBlend();
-        int drawY = scrollY + this.y;
-        int drawX;
 
-        if (drawLeft) {
-            drawX = scrollX + this.x - this.width + ADVANCEMENT_SIZE + 6;
-        } else {
-            drawX = scrollX + this.x;
-        }
-        int boxHeight;
-        
-        if (!CriterionGrid.requiresShift || Screen.hasShiftDown()) {
-            boxHeight = TITLE_SIZE + this.description.size() * this.minecraft.font.lineHeight + this.criterionGrid.height;
-        }
-        else {
-            boxHeight = TITLE_SIZE + this.description.size() * this.minecraft.font.lineHeight;
-        }
-
-        if (!this.description.isEmpty()) {
-            if (drawTop) {
-                this.render9Sprite(guiGraphics, drawX, drawY + ADVANCEMENT_SIZE - boxHeight, this.width, boxHeight, CORNER_SIZE, WIDGET_WIDTH, WIDGET_HEIGHT, 0, 52);
-            } else {
-                this.render9Sprite(guiGraphics, drawX, drawY, this.width, boxHeight, CORNER_SIZE, WIDGET_WIDTH, WIDGET_HEIGHT, 0, 52);
-            }
+        if (!this.description.isEmpty() || pageGrid != null) {
+            this.render9Sprite(
+                guiGraphics,
+                drawX,
+                backgroundY,
+                renderWidth,
+                boxHeight,
+                CORNER_SIZE,
+                WIDGET_WIDTH,
+                WIDGET_HEIGHT,
+                0,
+                52
+            );
         }
 
         // Title left side
         RenderUtil.setColor(betterDisplayInfo.getTitleColor(stateTitleLeft));
-        int left_side = Math.min(j, WIDGET_WIDTH - 16);
-        guiGraphics.blit(Resources.Gui.WIDGETS, drawX, drawY, 0, betterDisplayInfo.getTitleYMultiplier(stateTitleLeft) * WIDGET_HEIGHT, left_side, WIDGET_HEIGHT);
-        if (left_side < j) {
-            guiGraphics.blit(Resources.Gui.WIDGETS, drawX + left_side, drawY, 16, betterDisplayInfo.getTitleYMultiplier(stateTitleLeft) * WIDGET_HEIGHT, j - left_side, WIDGET_HEIGHT);
+        int leftSide = Math.min(obtainedWidth, WIDGET_WIDTH - 16);
+        guiGraphics.blit(
+            Resources.Gui.WIDGETS,
+            drawX,
+            titleY,
+            0,
+            betterDisplayInfo.getTitleYMultiplier(stateTitleLeft) * WIDGET_HEIGHT,
+            leftSide,
+            WIDGET_HEIGHT
+        );
+        if (leftSide < obtainedWidth) {
+            guiGraphics.blit(
+                Resources.Gui.WIDGETS,
+                drawX + leftSide,
+                titleY,
+                16,
+                betterDisplayInfo.getTitleYMultiplier(stateTitleLeft) * WIDGET_HEIGHT,
+                obtainedWidth - leftSide,
+                WIDGET_HEIGHT
+            );
         }
+
         // Title right side
+        int unobtainedWidth = renderWidth - obtainedWidth;
         RenderUtil.setColor(betterDisplayInfo.getTitleColor(stateTitleRight));
-        int right_side = Math.min(k, WIDGET_WIDTH - 16);
-        guiGraphics.blit(Resources.Gui.WIDGETS, drawX + j, drawY, WIDGET_WIDTH - right_side, betterDisplayInfo.getTitleYMultiplier(stateTitleRight) * WIDGET_HEIGHT, right_side, WIDGET_HEIGHT);
-        if (right_side < k) {
-            // + and - 2 is to create some overlap in the drawing when it extends past the max length of the texture
-            guiGraphics.blit(Resources.Gui.WIDGETS, drawX + j + right_side - 2, drawY, WIDGET_WIDTH - k + right_side - 2, betterDisplayInfo.getTitleYMultiplier(stateTitleRight) * WIDGET_HEIGHT, k - right_side + 2, WIDGET_HEIGHT);
+        int rightSide = Math.min(unobtainedWidth, WIDGET_WIDTH - 16);
+        guiGraphics.blit(
+            Resources.Gui.WIDGETS,
+            drawX + obtainedWidth,
+            titleY,
+            WIDGET_WIDTH - rightSide,
+            betterDisplayInfo.getTitleYMultiplier(stateTitleRight) * WIDGET_HEIGHT,
+            rightSide,
+            WIDGET_HEIGHT
+        );
+        if (rightSide < unobtainedWidth) {
+            guiGraphics.blit(
+                Resources.Gui.WIDGETS,
+                drawX + obtainedWidth + rightSide - 2,
+                titleY,
+                WIDGET_WIDTH - unobtainedWidth + rightSide - 2,
+                betterDisplayInfo.getTitleYMultiplier(stateTitleRight) * WIDGET_HEIGHT,
+                unobtainedWidth - rightSide + 2,
+                WIDGET_HEIGHT
+            );
         }
-        // Advancement icon
+
+        int iconX = detached ? drawX + 3 : nodeX + 3;
+        int iconY = detached ? titleY : nodeY;
         RenderUtil.setColor(betterDisplayInfo.getIconColor(stateIcon));
-        guiGraphics.blitSprite(stateIcon.frameSprite(this.displayInfo.getType()), scrollX + this.x + 3, scrollY + this.y, ICON_SIZE, ICON_SIZE);
+        guiGraphics.blitSprite(stateIcon.frameSprite(this.displayInfo.getType()), iconX, iconY, ICON_SIZE, ICON_SIZE);
         RenderUtil.setColor(betterDisplayInfo.defaultIconColor());
+        guiGraphics.renderFakeItem(this.displayInfo.getIcon(), iconX + 5, iconY + 5);
 
-        if (drawLeft) {
-            guiGraphics.drawString(this.minecraft.font, this.title, drawX + 5, scrollY + this.y + 9, -1);
-
-            if (s != null) {
-                guiGraphics.drawString(this.minecraft.font, s, scrollX + this.x - i, scrollY + this.y + 9, -1);
+        if (detached) {
+            int titleRight = progressText == null
+                ? drawX + renderWidth - 5
+                : drawX + renderWidth - progressTextWidth - 13;
+            int titleAvailableWidth = Math.max(0, titleRight - (drawX + 32));
+            String visibleTitle = this.fitTitleToWidth(this.title, titleAvailableWidth);
+            guiGraphics.drawString(this.minecraft.font, visibleTitle, drawX + 32, titleY + 9, -1);
+            if (progressText != null) {
+                guiGraphics.drawString(
+                    this.minecraft.font,
+                    progressText,
+                    drawX + renderWidth - progressTextWidth - 5,
+                    titleY + 9,
+                    -1
+                );
+            }
+        } else if (drawLeft) {
+            int titleStart = drawX + 5;
+            int progressX = progressText == null
+                ? drawX + renderWidth - 5
+                : Math.min(nodeX - progressTextWidth, drawX + renderWidth - progressTextWidth - 5);
+            int titleRight = progressText == null ? Math.min(nodeX, drawX + renderWidth - 5) : progressX - 5;
+            String visibleTitle = this.fitTitleToWidth(this.title, Math.max(0, titleRight - titleStart));
+            guiGraphics.drawString(this.minecraft.font, visibleTitle, titleStart, titleY + 9, -1);
+            if (progressText != null) {
+                guiGraphics.drawString(this.minecraft.font, progressText, progressX, titleY + 9, -1);
             }
         } else {
-            guiGraphics.drawString(this.minecraft.font, this.title, scrollX + this.x + 32, scrollY + this.y + 9, -1);
-
-            if (s != null) {
-                guiGraphics.drawString(this.minecraft.font, s, scrollX + this.x + this.width - i - 5, scrollY + this.y + 9, -1);
+            int titleStart = Math.max(drawX + 5, nodeX + 32);
+            int progressX = drawX + renderWidth - progressTextWidth - 5;
+            int titleRight = progressText == null ? drawX + renderWidth - 5 : progressX - 5;
+            String visibleTitle = this.fitTitleToWidth(this.title, Math.max(0, titleRight - titleStart));
+            guiGraphics.drawString(this.minecraft.font, visibleTitle, titleStart, titleY + 9, -1);
+            if (progressText != null) {
+                guiGraphics.drawString(this.minecraft.font, progressText, progressX, titleY + 9, -1);
             }
         }
 
-        int yOffset;
-        if (drawTop) {
-            yOffset = drawY + 26 - boxHeight + 7;
-        } else {
-            yOffset = scrollY + this.y + 9 + 17;
+        int yOffset = descriptionY;
+        for (int lineIndex = 0; lineIndex < this.description.size(); ++lineIndex) {
+            guiGraphics.drawString(
+                this.minecraft.font,
+                this.description.get(lineIndex),
+                drawX + 5,
+                yOffset + lineIndex * this.minecraft.font.lineHeight,
+                -5592406,
+                false
+            );
         }
-        for (int k1 = 0; k1 < this.description.size(); ++k1) {
-            guiGraphics.drawString(this.minecraft.font, this.description.get(k1), drawX + 5, yOffset + k1 * this.minecraft.font.lineHeight, -5592406, false);
-        }
-        if (this.criterionGrid != null && !CriterionGrid.requiresShift || Screen.hasShiftDown()) {
+
+        yOffset += descriptionHeight;
+        if (pageGrid != null) {
             int xOffset = drawX + 5;
-            yOffset += this.description.size() * this.minecraft.font.lineHeight;
-            for (int colIndex = 0; colIndex < this.criterionGrid.columns.size(); colIndex++) {
-                CriterionGrid.Column col = this.criterionGrid.columns.get(colIndex);
-                for (int rowIndex = 0; rowIndex < col.cells().size(); rowIndex++) {
-                    guiGraphics.drawString(this.minecraft.font, col.cells().get(rowIndex), xOffset, yOffset + rowIndex * this.minecraft.font.lineHeight, -5592406, false);
+            for (CriterionGrid.Column column : pageGrid.columns) {
+                for (int rowIndex = 0; rowIndex < column.cells().size(); rowIndex++) {
+                    guiGraphics.drawString(
+                        this.minecraft.font,
+                        column.cells().get(rowIndex),
+                        xOffset,
+                        yOffset + rowIndex * this.minecraft.font.lineHeight,
+                        -5592406,
+                        false
+                    );
                 }
-                xOffset += col.width();
+                xOffset += column.width();
+            }
+
+            if (detached && this.criterionPageCount > 1 && pageIndicatorHeight > 0) {
+                Component pageText = Component.translatable("betteradvancements.criteria_page", this.criterionPage + 1, this.criterionPageCount);
+                int pageTextWidth = this.minecraft.font.width(pageText);
+                guiGraphics.drawString(
+                    this.minecraft.font,
+                    pageText,
+                    drawX + renderWidth - pageTextWidth - 5,
+                    yOffset + pageGrid.height,
+                    -5592406,
+                    false
+                );
             }
         }
 
-        guiGraphics.renderFakeItem(this.displayInfo.getIcon(), scrollX + this.x + 8, scrollY + this.y + 5);
+        if (detached) {
+            guiGraphics.disableScissor();
+        }
+    }
+
+    private String fitTitleToWidth(String value, int availableWidth) {
+        if (availableWidth <= 0 || value.isEmpty()) {
+            return "";
+        }
+        if (this.minecraft.font.width(value) <= availableWidth) {
+            return value;
+        }
+
+        String ellipsis = "…";
+        int ellipsisWidth = this.minecraft.font.width(ellipsis);
+        if (ellipsisWidth > availableWidth) {
+            return "";
+        }
+
+        FormattedText head = this.minecraft.font.getSplitter().headByWidth(
+            FormattedText.of(value),
+            availableWidth - ellipsisWidth,
+            Style.EMPTY
+        );
+        return head.getString() + ellipsis;
+    }
+
+    public boolean isMouseOverDetachedPanel(double mouseX, double mouseY) {
+        return this.detachedPanelHitBoxValid
+            && mouseX >= this.detachedPanelX
+            && mouseX < this.detachedPanelX + this.detachedPanelWidth
+            && mouseY >= this.detachedPanelY
+            && mouseY < this.detachedPanelY + this.detachedPanelHeight;
+    }
+
+    public void clearDetachedPanelHitBox() {
+        this.detachedPanelHitBoxValid = false;
+    }
+
+    public boolean changeCriterionPage(double scrollDelta) {
+        if (!this.criterionPanelDetached
+            || (CriterionGrid.requiresShift && !Screen.hasShiftDown())
+            || this.criterionPageCount <= 1
+            || scrollDelta == 0.0D) {
+            return false;
+        }
+
+        if (scrollDelta < 0.0D) {
+            this.criterionPage = Math.min(this.criterionPage + 1, this.criterionPageCount - 1);
+        } else {
+            this.criterionPage = Math.max(this.criterionPage - 1, 0);
+        }
+
+        // Consume the wheel while a paged criterion panel is active, even at the first/last page.
+        return true;
     }
 
     protected void render9Sprite(GuiGraphics guiGraphics, int x, int y, int width, int height, int textureHeight, int textureWidth, int textureDistance, int textureX, int textureY) {
@@ -404,9 +750,9 @@ public class BetterAdvancementWidget implements IBetterAdvancementEntryGui {
 
     public boolean isMouseOver(double scrollX, double scrollY, double mouseX, double mouseY) {
         if (!this.displayInfo.isHidden() || this.advancementProgress != null && this.advancementProgress.isDone()) {
-            double left = scrollX + this.x;
+            double left = scrollX + this.betterAdvancementTabGui.getLayoutX(this);
             double right = left + ADVANCEMENT_SIZE;
-            double top = scrollY + this.y;
+            double top = scrollY + this.betterAdvancementTabGui.getLayoutY(this);
             double bottom = top + ADVANCEMENT_SIZE;
             return mouseX >= left && mouseX <= right && mouseY >= top && mouseY <= bottom;
         } else {
